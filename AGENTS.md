@@ -15,17 +15,19 @@
 
 ## 测试要求
 
-涉及曲库身份、元数据解析、Album/Artist 关系或扫描行为的修改，必须配套测试。
+本项目是个人使用项目，优先快速迭代和真机可靠性，不建立企业级测试体系，不追求覆盖率指标。
 
-测试至少覆盖：
-
-- 同名专辑但不同 Album Artist
-- 多 Artist
-- 多 Genre
-- Disc Number / Track Number
-- 缺失字段
-- 坏文件
+- 纯逻辑优先使用快速的 JVM 纯单元测试；涉及元数据解析、身份规则、排序、去重、Shuffle 等纯逻辑的修改必须有测试。
+- 涉及曲库身份、元数据解析、Album/Artist 关系时，测试至少覆盖：同名专辑但不同 Album Artist、多 Artist、多 Genre、Disc Number / Track Number、缺失字段、坏文件。
+- Android Framework / SAF / 持久权限 / 递归扫描 / 后台播放 / 通知栏 / OEM 行为不强制使用 Robolectric，可以由 Find X9 真机验收替代。
+- 如果测试方案需要沙箱 workaround、本地 Maven staging、特殊缓存复制或显著增加构建时间，停止该方案，不得阻塞开发。
 
 ## 阶段完成标准
 
-每个阶段结束后，必须确认项目仍然可构建、可运行，并记录未验证项或剩余风险。
+每个阶段结束后，最低验收标准：
+
+- 项目可正常 build；
+- 相关快速单元测试通过；
+- 涉及 Android 系统行为的部分通过 Find X9 真机功能验收。
+
+同时记录未验证项或剩余风险。
