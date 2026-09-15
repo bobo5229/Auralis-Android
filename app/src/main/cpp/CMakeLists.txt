@@ -26,7 +26,15 @@ set(WITH_VORBIS ON  CACHE BOOL "" FORCE)
 # Note: this leaves the submodule working tree modified. Restoring it with
 # `git -C app/src/main/cpp/taglib checkout -- .` is harmless; the next configure
 # applies the patches again.
+#
+# Every exit code is compared with STREQUAL: a failed execute_process yields an
+# error *string*, and `if(<string> EQUAL 0)` treats a non-numeric string as 0,
+# which would silently skip the patch. The result is additionally verified by
+# reading the file back, so an unpatched TagLib can never be built silently.
 set(TAGLIB_PATCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/taglib-patches")
+set(TAGLIB_MP4TAG_CPP "${TAGLIB_SRC}/taglib/mp4/mp4tag.cpp")
+set(TAGLIB_MP4TAG_PATCH_MARKER "merged.append(value.toStringList())")
+
 find_package(Git REQUIRED)
 file(GLOB TAGLIB_PATCHES "${TAGLIB_PATCH_DIR}/*.patch")
 list(SORT TAGLIB_PATCHES)
@@ -34,23 +42,11 @@ foreach(patch IN LISTS TAGLIB_PATCHES)
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" apply --reverse --check "${patch}"
     WORKING_DIRECTORY "${TAGLIB_SRC}"
-    RESULT_VARIABLE patch_already_applied
-    OUTPUT_QUIET ERROR_QUIET)
-  if(patch_already_applied EQUAL 0)
+    RESULT_VARIABLE patch_reverse_check
+    OUTPUT_QUIET ERROR_VARIABLE patch_error)
+  if(patch_reverse_check STREQUAL "0")
     message(STATUS "TagLib patch already applied: ${patch}")
     continue()
-  endif()
-
-  execute_process(
-    COMMAND "${GIT_EXECUTABLE}" apply --check "${patch}"
-    WORKING_DIRECTORY "${TAGLIB_SRC}"
-    RESULT_VARIABLE patch_applies
-    OUTPUT_QUIET ERROR_VARIABLE patch_error)
-  if(NOT patch_applies EQUAL 0)
-    message(FATAL_ERROR
-      "TagLib patch does not apply: ${patch}\n"
-      "The pinned TagLib revision most likely changed, so the patch has to be "
-      "re-checked against it.\n${patch_error}")
   endif()
 
   execute_process(
@@ -58,11 +54,24 @@ foreach(patch IN LISTS TAGLIB_PATCHES)
     WORKING_DIRECTORY "${TAGLIB_SRC}"
     RESULT_VARIABLE patch_result
     ERROR_VARIABLE patch_error)
-  if(NOT patch_result EQUAL 0)
-    message(FATAL_ERROR "Failed to apply TagLib patch ${patch}:\n${patch_error}")
+  if(NOT patch_result STREQUAL "0")
+    message(FATAL_ERROR
+      "Failed to apply TagLib patch ${patch} (git exited with '${patch_result}').\n"
+      "The pinned TagLib revision most likely changed, so the patch has to be "
+      "re-checked against it.\n${patch_error}")
   endif()
   message(STATUS "Applied TagLib patch: ${patch}")
 endforeach()
+
+# Refuse to build an unpatched TagLib: duplicate MP4 atoms would be dropped again,
+# losing values before they reach the interpreter.
+file(READ "${TAGLIB_MP4TAG_CPP}" taglib_mp4tag_source)
+string(FIND "${taglib_mp4tag_source}" "${TAGLIB_MP4TAG_PATCH_MARKER}" taglib_patch_marker_pos)
+if(taglib_patch_marker_pos EQUAL -1)
+  message(FATAL_ERROR
+    "TagLib patch verification failed: ${TAGLIB_MP4TAG_CPP} does not contain the "
+    "expected patched code. Refusing to build an unpatched TagLib.")
+endif()
 
 add_subdirectory("${TAGLIB_SRC}" "${TAGLIB_BUILD}")
 

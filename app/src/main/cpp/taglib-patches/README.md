@@ -8,6 +8,16 @@ Application is idempotent: a patch that is already applied is skipped, and a pat
 fits (because the pinned revision changed) fails the configure step with a clear message instead of
 building silently wrong code.
 
+After a successful application the configure step reads the patched file back and checks for
+`TAGLIB_MP4TAG_PATCH_MARKER` (set in `CMakeLists.txt`, currently the `merged.append(...)` line
+introduced by patch 0001). If the marker is missing the build stops with a fatal error, so an
+unpatched TagLib is never built. **When a patch is regenerated, keep that marker in sync with the
+patched code, otherwise the configure step will fail.**
+
+Exit codes are always compared with `STREQUAL`: `execute_process` returns an error *string* when it
+cannot run the program, and `if(<string> EQUAL 0)` treats a non-numeric string as `0`, which would
+silently skip the patch.
+
 After a build the submodule working tree shows the modified files. That is expected;
 `git -C app/src/main/cpp/taglib checkout -- .` restores it and the next configure re-applies.
 
