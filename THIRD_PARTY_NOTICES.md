@@ -17,6 +17,8 @@ Auralis Mobile 的 SAF 扫描模块（`com.bobo.auralis.mobile.library.saf`）�
 | `musikr/src/main/java/org/oxycblt/musikr/fs/Path.kt` | `app/src/main/java/com/bobo/auralis/mobile/library/saf/SafPath.kt` | 裁剪：移除 Volume 兼容层、Windows 路径格式与 MediaStore 命名，保留 `Components` 路径运算 |
 | `musikr/src/main/java/org/oxycblt/musikr/fs/FS.kt` | `app/src/main/java/com/bobo/auralis/mobile/library/saf/SafModels.kt` | 裁剪：移除 `AddedMs` 与 `FS` 接口，保留 `File` / `Directory` 结构；新增扫描事件与 `SafDocumentKey`（provider + documentId，用于重叠根目录的稳定去重） |
 | `musikr/src/main/java/org/oxycblt/musikr/util/LangUtil.kt` | 未移植（改用 kotlinx.coroutines 标准 `async` / `awaitAll`） | 仅参考并发组织方式 |
+| `musikr/src/main/java/org/oxycblt/musikr/metadata/*` 与 `musikr/src/main/cpp/*` | `app/src/main/java/com/bobo/auralis/mobile/library/metadata/*` 与 `app/src/main/cpp/*` | Phase 2B 移植：剥离 Auxio FS 改用 `MetadataTarget`；JNI 补齐 ID3v2 `USLT` 歌词桥接；保留按容器（ID3v2/MP4/Xiph）分离的原始标签映射与音频属性 |
+| `musikr/src/main/java/org/oxycblt/musikr/tag/parse/TagFields.kt` | `app/src/main/java/com/bobo/auralis/mobile/library/metadata/MetadataInterpreter.kt` | Phase 2C 参考：复用各音轨容器（ID3v2/MP4/Xiph）标准标签别名映射关系（tag key aliases）；丢弃其产品优先级、丢弃 `TagParser.kt`、丢弃 `Separators.kt`，按 Auralis 专属规则实现严格多值与解释 |
 
 目录选择流程参考 Auxio 的
 `app/src/main/java/org/oxycblt/auxio/music/locations/LocationsDialog.kt`：

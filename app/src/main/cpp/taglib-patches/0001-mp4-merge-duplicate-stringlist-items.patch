@@ -1,0 +1,30 @@
+diff --git a/taglib/mp4/mp4tag.cpp b/taglib/mp4/mp4tag.cpp
+index 1640cb05..d7f461e1 100644
+--- a/taglib/mp4/mp4tag.cpp
++++ b/taglib/mp4/mp4tag.cpp
+@@ -618,9 +618,24 @@ bool MP4::Tag::setComplexProperties(const String &key, const List<VariantMap> &v
+ 
+ void MP4::Tag::addItem(const String &name, const Item &value)
+ {
+-  if(!d->items.contains(name)) {
++  auto it = d->items.find(name);
++  if(it == d->items.end()) {
+     d->items.insert(name, value);
+   }
++  else if(it->second.type() == Item::Type::StringList
++          && value.type() == Item::Type::StringList) {
++    // A file may store several values of one field in several atoms that share a
++    // single name, e.g. one "----:com.apple.iTunes:GENRE" atom per genre, or one
++    // "\251wrt" atom per composer. Ignoring every atom after the first silently
++    // loses those values, so merge the two string lists in the order in which the
++    // atoms appear in the file. Values are taken as they are: no trimming,
++    // splitting, de-duplication or case folding is applied here.
++    StringList merged = it->second.toStringList();
++    merged.append(value.toStringList());
++    const AtomDataType atomDataType = it->second.atomDataType();
++    it->second = Item(merged);
++    it->second.setAtomDataType(atomDataType);
++  }
+   else {
+     debug("MP4: Ignoring duplicate atom \"" + name + "\"");
+   }

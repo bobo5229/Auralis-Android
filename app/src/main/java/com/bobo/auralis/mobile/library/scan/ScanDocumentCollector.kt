@@ -1,10 +1,12 @@
 package com.bobo.auralis.mobile.library.scan
 
+import android.net.Uri
 import com.bobo.auralis.mobile.library.saf.SafDocumentKey
 
 /** A file that passed the spike's extension filter. */
 data class CandidateAudio(
     val documentKey: SafDocumentKey,
+    val uri: Uri? = null,
     val fileName: String,
     val format: AudioFormat,
     val size: Long,
@@ -30,7 +32,7 @@ sealed interface DocumentAcceptResult {
  * reports the same document ID for both, so both events map to the same key and only the first one
  * is counted.
  *
- * Pure logic: no Android types are used, so this is covered by fast JVM tests.
+ * Pure logic: no Android types are used in processing, so this is covered by fast JVM tests.
  */
 class ScanDocumentCollector {
     private val seenDocuments = mutableSetOf<SafDocumentKey>()
@@ -49,6 +51,7 @@ class ScanDocumentCollector {
         fileName: String,
         size: Long,
         rootLabel: String,
+        uri: Uri? = null,
     ): DocumentAcceptResult {
         if (!seenDocuments.add(documentKey)) {
             return DocumentAcceptResult.Duplicate
@@ -63,6 +66,7 @@ class ScanDocumentCollector {
         val candidate =
             CandidateAudio(
                 documentKey = documentKey,
+                uri = uri,
                 fileName = fileName,
                 format = format,
                 size = size,

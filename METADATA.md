@@ -29,6 +29,11 @@ Auralis Mobile 只读取音频文件中的元数据，不允许修改或写回�
 
 同一字段中只有英文分号会产生多个值。解析规则不能根据常见音乐命名习惯进行猜测或拆分。
 
+补充规则（Phase 2C 实现）：
+- 若底层容器本身表达物理多值（例如 ID3v2.4 多文本帧、MP4 多个文本原子、Xiph 多个同名键），保持物理多值并对每个字符串分别按英文分号 `;` 分割展平。
+- 连续分号（如 `;;A;;;B;;`）或分割后全为空白的项会被忽略，不生成空实体。
+- 保持原始出现顺序，不进行字母大小写去重，不合并不同项。
+
 ## 3. Artist 与 Album Artist
 
 Artist 与 Album Artist 是两个严格区分的字段，不得互相替代或合并：
@@ -40,12 +45,27 @@ Artist 与 Album Artist 是两个严格区分的字段，不得互相替代或�
 
 缺失 Album Artist 时，界面必须显示“未知 Album Artist”，禁止自动降级使用 Artist 作为 Album Artist。其他缺失字段同样显示对应的“未知”值，不允许根据其他字段推测补全。
 
+补充规则（Phase 2C 实现）：
+- 在结构化元数据解释层，缺失的 Artist 或 Album Artist 均表达为 `emptyList()`，不注入假值。
+- 严禁以下降级与推测行为：
+  - 禁止在缺失 Album Artist 时用 Artist 补全；
+  - 禁止在缺失 Artist 时用 Album Artist 补全；
+  - 禁止在缺失 Artist 时用 Composer 补全；
+  - 禁止根据 Compilation 标志自动生成 "Various Artists"。
+
 ## 4. 日期与年份
 
 - Date 格式固定为 `YYYY-MM-DD`。
 - 界面显示完整日期，不显示为只有年份的替代形式。
 - 如有需要，Year 可以由 Date 的前四位派生。
 - 不要求单独维护 Year 字段。
+
+补充规则（Phase 2C 实现）：
+- 优先读取各格式标准日期字段：MP4 为 `©day`，Xiph 为 `DATE`，ID3v2 为 `TDRC`。
+- 仅当字段包含合法 `YYYY-MM-DD`（或带 ISO-8601 时间的合法前缀）时才确认为有效 Date。
+- 不优先读取 `ORIGINALDATE` / `TDOR` 替代正式发行 Date。
+- 单独年份（如 `TYER` 或 `YEAR = "2024"`）或缺少月/日的信息保持为缺失（`null`），禁止将年份自动升级为 Date。
+- 解析器不自行猜测或修复不规范日期。
 
 ## 5. 专辑与曲目身份
 
@@ -67,6 +87,12 @@ Artist 与 Album Artist 是两个严格区分的字段，不得互相替代或�
 ### 曲目身份与排序
 
 Disc Number 与 Track Number 共同参与曲目区分和专辑内排序。多碟专辑中，即使 Track Number 相同，只要 Disc Number 不同，也必须视为不同曲目位置。
+
+补充规则（Phase 2C 实现）：
+- Track Number 与 Disc Number 属于结构化数字（如 `"1/12"` 对应序号 1、总数 12；`"3"` 对应序号 3、总数缺失），不遵循文本多值规则。
+- 支持斜杠合并写法（`TRCK` / `TPOS` / `trkn` / `disk`），并支持 Xiph 独立的 `TOTALTRACKS` / `TRACKTOTAL` / `TRACKC` 与 `TOTALDISCS` / `DISCTOTAL` / `DISCC` 组合。
+- 无法合法解析为正整数时置为 `null`，不进行猜测，不抛出异常。
+- ID3 数字 `TCON`、括号代码 `(17)`、Winamp 扩展流派表与 MP4 `gnre` 属于格式标准枚举，在解析前先行映射还原为文字标准流派，再遵循 Auralis 英文分号 `;` 分割规则；还原后的内部符号（如 `Rock & Roll`、`Pop/Funk`）不作为多值分隔符。
 
 ## 6. Artwork 与歌词
 

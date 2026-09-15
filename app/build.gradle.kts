@@ -9,6 +9,8 @@ android {
         version = release(37)
     }
 
+    ndkVersion = "28.2.13676358"
+
     defaultConfig {
         applicationId = "com.bobo.auralis.mobile"
         minSdk = 28
@@ -17,6 +19,17 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildTypes {

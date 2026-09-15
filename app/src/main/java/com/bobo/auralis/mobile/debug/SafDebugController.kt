@@ -8,6 +8,13 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
+import com.bobo.auralis.mobile.library.metadata.MetadataExtractor
+import com.bobo.auralis.mobile.library.metadata.MetadataResult
+import com.bobo.auralis.mobile.library.metadata.MetadataTarget
+import com.bobo.auralis.mobile.library.metadata.RawMetadataDisplay
+import com.bobo.auralis.mobile.library.metadata.interpret
+import com.bobo.auralis.mobile.library.metadata.toRawDisplay
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
 import com.bobo.auralis.mobile.library.scan.DocumentAcceptResult
 import com.bobo.auralis.mobile.library.scan.ScanDocumentCollector
@@ -78,6 +85,71 @@ class SafDebugController(context: Context) {
 
     /** Candidate audio files discovered by the latest scan, in discovery order. */
     val candidates = mutableStateListOf<CandidateAudio>()
+
+    /** Selected audio candidate and its raw metadata extraction result. */
+    var selectedCandidate by mutableStateOf<CandidateAudio?>(null)
+        private set
+
+    var selectedMetadata by mutableStateOf<RawMetadataDisplay?>(null)
+        private set
+
+    var selectedInterpreted by mutableStateOf<AuralisMetadata?>(null)
+        private set
+
+    var inspectError by mutableStateOf<String?>(null)
+        private set
+
+    var isExtracting by mutableStateOf(false)
+        private set
+
+    fun inspect(candidate: CandidateAudio) {
+        selectedCandidate = candidate
+        selectedMetadata = null
+        selectedInterpreted = null
+        inspectError = null
+        val uri = candidate.uri
+        if (uri == null) {
+            inspectError = "无法获取文件 URI"
+            return
+        }
+        scope.launch {
+            isExtracting = true
+            try {
+                val extractor = MetadataExtractor.from(appContext)
+                when (val result = extractor.extract(MetadataTarget(uri, candidate.fileName))) {
+                    is MetadataResult.Success -> {
+                        val md = result.metadata
+                        if (md != null) {
+                            selectedMetadata = md.toRawDisplay(candidate.fileName)
+                            selectedInterpreted = md.interpret()
+                        } else {
+                            inspectError = "读取成功但元数据为空"
+                        }
+                    }
+                    is MetadataResult.NoMetadata -> {
+                        inspectError = "文件不包含可识别的元数据"
+                    }
+                    is MetadataResult.NotAudio -> {
+                        inspectError = "TagLib 未识别该文件为支持的音频格式"
+                    }
+                    is MetadataResult.ProviderFailed -> {
+                        inspectError = "SAF Provider 打开文件失败 (openFileDescriptor 失败)"
+                    }
+                }
+            } catch (e: Exception) {
+                inspectError = "解析异常: ${e.javaClass.simpleName}: ${e.message}"
+            } finally {
+                isExtracting = false
+            }
+        }
+    }
+
+    fun clearSelectedMetadata() {
+        selectedCandidate = null
+        selectedMetadata = null
+        selectedInterpreted = null
+        inspectError = null
+    }
 
     /** Every unreachable directory reported by the latest scan. */
     val errors = mutableStateListOf<ScanErrorItem>()
@@ -161,6 +233,7 @@ class SafDebugController(context: Context) {
                                     fileName = file.path.name.orEmpty(),
                                     size = file.size,
                                     rootLabel = file.root.path.toString(),
+                                    uri = file.uri,
                                 )
                             when (result) {
                                 is DocumentAcceptResult.Duplicate -> Unit

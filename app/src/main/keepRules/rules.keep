@@ -10,3 +10,6 @@
 #-keepclassmembers class fqcn.of.javascript.interface.for.webview {
 #   public *;
 #}
+
+# Keep classes accessed via JNI reflection in TagLib bindings
+-keep class com.bobo.auralis.mobile.library.metadata.** { *; }
