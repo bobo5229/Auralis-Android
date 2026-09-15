@@ -117,3 +117,15 @@ DataStore 只保存轻量设置，例如界面偏好、播放相关选项和其�
 - 其他必要的用户数据
 
 音乐文件和可由授权目录重新扫描得到的曲库本身不作为必须备份的对象。音乐库可以通过重新授权目录并重新扫描重建。
+
+## 9. 元数据解析层（Phase 2A 调研结论）
+
+本节记录 Technical Spike Phase 2A 已确认的结论，调研细节见 `docs/METADATA_ENGINE_RESEARCH.md`。方案已确定，但原生构建链路尚未实机验证，验证属于 Phase 2B。
+
+- 元数据读取复用 Auxio/Musikr 的“文件/URI → 原始 TagLib 元数据”层（TagLib JNI），不从零实现 ID3、MP4 Atom、Vorbis Comment、FLAC Picture 解析。
+- 该层只产出原始结果：按容器分开的 `id3v2` / `xiph` / `mp4` 三组 `key → List<String>`、音频属性（mimeType、时长、比特率、采样率）以及一张内嵌封面。它不做任何字段语义解释。
+- Auralis 的元数据解释规则完全由 Auralis 自己实现并位于该层之上：Artist 与 Album Artist 严格区分、Artist 缺失时不退化为 Composer、不自动补 Various Artists、多值字段只用英文分号 `;` 分隔、缺失字段保持未知、Date 按 Auralis 规则处理。`METADATA.md` 是唯一依据。
+- 该层通过 `ContentResolver.openFileDescriptor(uri, "r")` 读取 SAF 内容，不使用真实绝对文件路径，也不依赖 MediaStore。
+- 原生部分使用 CMake + Android NDK 构建，TagLib 以源码子模块参与同一次 CMake 构建，不依赖 `sh`、WSL 或其他 Unix-only 脚本。
+- v1 的 native ABI 只编译 `arm64-v8a`。
+- 该层不引入 Room、播放链路、缓存或 UI 依赖。
