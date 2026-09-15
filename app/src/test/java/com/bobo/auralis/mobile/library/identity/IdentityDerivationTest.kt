@@ -128,10 +128,14 @@ class IdentityDerivationTest {
 
     /**
      * Property names of a Kotlin class, ignoring compiler-generated members such
-     * as the `$stable` marker the Compose plugin adds to every data class.
+     * as a `Companion` object or the `$stable` marker the Compose plugin adds.
      */
     private fun declaredFieldNames(type: Class<*>): Set<String> = type.declaredFields
-        .filterNot { it.isSynthetic || it.name.startsWith('$') }
+        .filterNot {
+            it.isSynthetic ||
+                java.lang.reflect.Modifier.isStatic(it.modifiers) ||
+                it.name.startsWith('$')
+        }
         .map { it.name.lowercase() }
         .toSet()
 }
