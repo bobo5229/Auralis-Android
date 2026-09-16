@@ -40,6 +40,9 @@ interface SourceDao {
     @Query("SELECT * FROM track_source WHERE trackId = :trackId")
     suspend fun findByTrack(trackId: TrackId): List<TrackSourceEntity>
 
+    @Query("SELECT * FROM track_source ORDER BY relativePath ASC")
+    suspend fun getAll(): List<TrackSourceEntity>
+
     /**
      * Sources not observed by the given scan session.
      *

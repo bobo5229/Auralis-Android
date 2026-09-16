@@ -44,6 +44,9 @@ interface TrackDao {
     @Query("DELETE FROM track WHERE trackId = :trackId")
     suspend fun deleteById(trackId: TrackId)
 
+    @Query("SELECT * FROM track ORDER BY createdAt ASC")
+    suspend fun getAll(): List<TrackEntity>
+
     @Query("SELECT COUNT(*) FROM track")
     suspend fun count(): Int
 }

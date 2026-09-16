@@ -38,16 +38,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
 import com.bobo.auralis.mobile.library.metadata.RawMetadataDisplay
-import com.bobo.auralis.mobile.library.saf.SafLocation
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
 
 /**
- * Technical Spike Phase 2B screen.
+ * Technical Spike Phase 3A debug inspection screen.
  *
- * Scope: SAF root selection/persistence, recursive scan, and raw TagLib metadata extraction display.
- * Direct display of raw extraction results and raw tag maps for verification on real device.
+ * Implements `docs/phase3a/08_DEBUG_ACCEPTANCE.md` §62:
+ * - Displays TrackId, TrackKey, TrackKey strength, SourceId, SafDocumentKey, root priority,
+ *   active source, and source states (availability, parse, playability).
+ * - Displays Room-backed library roots and scan pipeline stats.
  */
 @Composable
 fun SafDebugScreen(modifier: Modifier = Modifier) {
@@ -66,10 +68,10 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { Text("Auralis Phase 2B Spike", style = MaterialTheme.typography.headlineSmall) }
+            item { Text("Auralis Phase 3A Inspection", style = MaterialTheme.typography.headlineSmall) }
             item {
                 Text(
-                    "技术验证页：TagLib JNI 原生元数据提取与格式解码验证",
+                    "技术验证页：Room 数据库图谱、对账结果与真机 SAF 行为验收",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -138,6 +140,12 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                     ) {
                         Text("重新扫描")
                     }
+                    OutlinedButton(
+                        onClick = { controller.refreshDatabaseTracks() },
+                        enabled = !controller.isScanning,
+                    ) {
+                        Text("刷新曲库")
+                    }
                 }
             }
 
@@ -149,7 +157,7 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                     )
                 }
             }
-            items(controller.roots, key = { it.uri.toString() }) { root ->
+            items(controller.roots, key = { it.rootId.value.toString() }) { root ->
                 RootRow(
                     root = root,
                     error = controller.rootErrorFor(root),
@@ -183,30 +191,27 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                 }
             }
 
+            // §62: Reconciled Database Tracks Inspection Section
             item {
                 Text(
-                    "候选音频 (${controller.candidates.size}) - 点击条目查看原始元数据",
+                    "数据库逻辑曲目 (${controller.inspectedTracks.size})",
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
                 )
             }
-            if (controller.candidates.isEmpty()) {
+            if (controller.inspectedTracks.isEmpty()) {
                 item {
                     Text(
-                        "暂无候选音频，点击“重新扫描”开始。",
+                        "数据库暂无曲目，完成扫描后将在此展示 TrackId、TrackKey、Active Source 及完整图谱关系。",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
             }
             items(
-                items = controller.candidates,
-                key = { "${it.documentKey.provider}|${it.documentKey.documentId}" },
-            ) { candidate ->
-                val isSelected = controller.selectedCandidate == candidate
-                CandidateRow(
-                    candidate = candidate,
-                    isSelected = isSelected,
-                    onInspect = { controller.inspect(candidate) },
-                )
+                items = controller.inspectedTracks,
+                key = { it.track.trackId.value.toString() },
+            ) { item ->
+                TrackInspectionCard(item)
             }
         }
     }
@@ -220,10 +225,97 @@ private fun StatusSection(controller: SafDebugController) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text("状态: ${controller.status.label}", style = MaterialTheme.typography.titleMedium)
-            Text("扫描文件总数: ${controller.totalFileCount}")
-            Text("候选音频数量: ${controller.candidateCount}")
+            Text("发现文件总数: ${controller.totalFileCount}")
+            Text("发现音频数量: ${controller.candidateCount}")
+            Text("曲库曲目数量: ${controller.inspectedTracks.size}")
             Text("错误数量: ${controller.errorCount}")
             Text("扫描耗时: ${formatDuration(controller.elapsedMs)}")
+        }
+    }
+}
+
+@Composable
+private fun TrackInspectionCard(item: TrackInspectionItem) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (item.activeSourceId != null) {
+                MaterialTheme.colorScheme.surfaceVariant
+            } else {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f) // Tombstone visual indicator
+            },
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = item.track.title ?: "（无 Title）",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = if (item.activeSourceId != null) "ACTIVE" else "TOMBSTONE",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (item.activeSourceId != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            }
+
+            MetadataItem("TrackId", item.track.trackId.value.toString())
+            MetadataItem("TrackKey", "${item.track.trackKeyVersion}:${item.track.trackKeyHash.take(16)}... (${item.track.trackKeyStrength.name})")
+            MetadataItem("Album", item.albumTitle ?: "（无 / null）")
+            MetadataItem("Artists", if (item.artists.isEmpty()) "（无）" else item.artists.joinToString(" ; "))
+            MetadataItem("Genres", if (item.genres.isEmpty()) "（无）" else item.genres.joinToString(" ; "))
+            MetadataItem("Active SourceId", item.activeSourceId?.value?.toString() ?: "（无活跃源）")
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "物理源列表 (${item.sources.size}):",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+
+            item.sources.forEach { detail ->
+                val s = detail.source
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (detail.isActive) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                s.fileName,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            if (detail.isActive) {
+                                Text("★ ACTIVE WINNER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        Text("SourceId: ${s.sourceId.value}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text("DocumentKey: ${s.provider} | ${s.documentId}", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text(
+                            "RootPriority: ${detail.rootPriority ?: "N/A"} · 状态: ${s.availabilityState.name} / ${s.parseState.name} / ${s.playabilityState.name}",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -349,34 +441,35 @@ private fun MetadataInspectionCard(
             )
             if (display.hasLyrics && display.lyricsSnippet != null) {
                 Text(
-                    "歌词预览: ${display.lyricsSnippet}",
+                    "歌词前100字: ${display.lyricsSnippet.take(100).replace('\n', ' ')}",
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            MetadataItem(
-                "Artwork",
-                if (display.hasArtwork) "存在 (${formatBytes(display.artworkBytes.toLong())})" else "无",
-            )
+            MetadataItem("Artwork", if (display.hasArtwork) "存在 (${formatBytes(display.artworkBytes.toLong())})" else "无")
+            MetadataItem("Codec / MIME", display.mimeType)
             MetadataItem("Duration", "${display.durationMs} ms (${formatDuration(display.durationMs)})")
             MetadataItem("Bitrate", "${display.bitrateKbps} kbps")
             MetadataItem("Sample Rate", "${display.sampleRateHz} Hz")
-            MetadataItem("Codec / MIME", display.mimeType)
 
-            HorizontalDivider()
-            Text("原始 Tag Map (可展开核对)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("底层标签键值对映射 (原始提取):", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
 
-            ExpandableTagMapSection("ID3v2 Map", display.id3v2Map)
-            ExpandableTagMapSection("MP4 Map", display.mp4Map)
-            ExpandableTagMapSection("Xiph Map", display.xiphMap)
+            ExpandableTagMapSection("ID3v2 标签映射", display.id3v2Map)
+            ExpandableTagMapSection("Vorbis / FLAC / Xiph 注释映射", display.xiphMap)
+            ExpandableTagMapSection("MP4 / iTunes Atoms 映射", display.mp4Map)
         }
     }
 }
 
 @Composable
 private fun MetadataItem(label: String, value: String) {
-    Row(modifier = Modifier.fillMaxWidth()) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
             "$label: ",
             style = MaterialTheme.typography.bodyMedium,
@@ -419,7 +512,7 @@ private fun ExpandableTagMapSection(title: String, map: Map<String, List<String>
 
 @Composable
 private fun RootRow(
-    root: SafLocation.Opened,
+    root: LibraryRootEntity,
     error: String?,
     enabled: Boolean,
     onRemove: () -> Unit,
@@ -430,12 +523,18 @@ private fun RootRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(root.path.toString(), style = MaterialTheme.typography.bodyLarge)
+                Text(root.displayPath, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    root.uri.toString(),
+                    "Priority: ${root.priority} · 状态: ${root.availabilityState.name}",
                     style = MaterialTheme.typography.bodySmall,
-                    maxLines = 2,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    root.treeUri,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    fontFamily = FontFamily.Monospace,
                 )
                 if (error != null) {
                     Text(
@@ -467,38 +566,6 @@ private fun ErrorRow(error: ScanErrorItem) {
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(error.message, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun CandidateRow(
-    candidate: CandidateAudio,
-    isSelected: Boolean,
-    onInspect: () -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { onInspect() },
-        colors = if (isSelected) {
-            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        } else {
-            CardDefaults.cardColors()
-        },
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(candidate.fileName, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "${candidate.format.label} · ${formatBytes(candidate.size)} · 来源: ${candidate.rootLabel}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            TextButton(onClick = onInspect) {
-                Text(if (isSelected) "已选中" else "查看标签")
-            }
         }
     }
 }

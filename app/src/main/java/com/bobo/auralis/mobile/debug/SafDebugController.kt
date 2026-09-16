@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.bobo.auralis.mobile.library.db.AuralisDatabase
+import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
 import com.bobo.auralis.mobile.library.metadata.MetadataExtractor
 import com.bobo.auralis.mobile.library.metadata.MetadataResult
@@ -15,21 +17,18 @@ import com.bobo.auralis.mobile.library.metadata.MetadataTarget
 import com.bobo.auralis.mobile.library.metadata.RawMetadataDisplay
 import com.bobo.auralis.mobile.library.metadata.interpret
 import com.bobo.auralis.mobile.library.metadata.toRawDisplay
-import com.bobo.auralis.mobile.library.scan.CandidateAudio
-import com.bobo.auralis.mobile.library.scan.DocumentAcceptResult
-import com.bobo.auralis.mobile.library.scan.ScanDocumentCollector
+import com.bobo.auralis.mobile.library.pipeline.LibraryScanPipeline
+import com.bobo.auralis.mobile.library.saf.LibraryRootRepository
 import com.bobo.auralis.mobile.library.saf.SafLocation
-import com.bobo.auralis.mobile.library.saf.SafQuery
-import com.bobo.auralis.mobile.library.saf.SafScanEvent
-import com.bobo.auralis.mobile.library.saf.SafScanner
+import com.bobo.auralis.mobile.library.scan.CandidateAudio
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Temporary Technical Spike scan status. */
 enum class ScanStatus(val label: String) {
@@ -49,19 +48,20 @@ data class ScanErrorItem(
 )
 
 /**
- * Temporary state holder for the Technical Spike debug screen.
+ * State holder for the Phase 3A Technical Spike & Debug Screen.
  *
- * Deliberately not a ViewModel: the debug screen is disposable and a configuration change may
- * cancel an in-progress spike scan. Product architecture will introduce a proper scan state holder
- * together with Room.
+ * Implements §62 inspection: displays TrackId, TrackKey, TrackKey strength,
+ * SourceId, SafDocumentKey, root priority, active source, and source states.
  */
 class SafDebugController(context: Context) {
     private val appContext = context.applicationContext
-    private val rootStore = SafRootStore(appContext)
+    private val database = AuralisDatabase.get(appContext)
+    private val rootRepository = LibraryRootRepository(appContext, database)
+    private val pipeline = LibraryScanPipeline(appContext, database)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var scanJob: Job? = null
 
-    var roots by mutableStateOf(rootStore.load())
+    var roots by mutableStateOf<List<LibraryRootEntity>>(emptyList())
         private set
 
     var status by mutableStateOf(ScanStatus.Idle)
@@ -86,6 +86,9 @@ class SafDebugController(context: Context) {
     /** Candidate audio files discovered by the latest scan, in discovery order. */
     val candidates = mutableStateListOf<CandidateAudio>()
 
+    /** Reconciled logical tracks and their physical sources from Room database (§62). */
+    val inspectedTracks = mutableStateListOf<TrackInspectionItem>()
+
     /** Selected audio candidate and its raw metadata extraction result. */
     var selectedCandidate by mutableStateOf<CandidateAudio?>(null)
         private set
@@ -101,6 +104,13 @@ class SafDebugController(context: Context) {
 
     var isExtracting by mutableStateOf(false)
         private set
+
+    init {
+        scope.launch {
+            roots = rootRepository.initialize()
+            refreshDatabaseTracks()
+        }
+    }
 
     fun inspect(candidate: CandidateAudio) {
         selectedCandidate = candidate
@@ -160,7 +170,7 @@ class SafDebugController(context: Context) {
         get() = status == ScanStatus.Scanning
 
     /** Non-null when [root] itself was unreachable during the latest scan. */
-    fun rootErrorFor(root: SafLocation.Opened): String? = rootErrors[root.uri]
+    fun rootErrorFor(root: LibraryRootEntity): String? = rootErrors[Uri.parse(root.treeUri)]
 
     fun addRoot(uri: Uri?) {
         if (uri == null || isScanning) return
@@ -170,29 +180,79 @@ class SafDebugController(context: Context) {
             message = "无法取得该目录的持久读权限，请重新选择"
             return
         }
-        if (!rootStore.add(opened)) {
-            message = "该目录已在曲库根目录列表中"
-            return
-        }
 
-        message = null
-        roots = rootStore.load()
+        scope.launch {
+            val added = rootRepository.addRoot(opened)
+            if (added == null) {
+                message = "该目录已在曲库根目录列表中"
+            } else {
+                message = null
+                roots = rootRepository.getRoots()
+            }
+        }
     }
 
-    fun removeRoot(root: SafLocation.Opened) {
+    fun removeRoot(root: LibraryRootEntity) {
         if (isScanning) return
 
-        if (rootStore.remove(root)) {
-            roots = rootStore.load()
-            rootErrors.remove(root.uri)
-            message = null
+        scope.launch {
+            if (rootRepository.removeRoot(root.rootId)) {
+                roots = rootRepository.getRoots()
+                rootErrors.remove(Uri.parse(root.treeUri))
+                message = null
+                refreshDatabaseTracks()
+            }
         }
     }
 
-    /** Starts a fresh scan of all configured roots. */
+    /** Starts a fresh scan of all configured roots through [LibraryScanPipeline]. */
     fun rescan() {
         if (isScanning || roots.isEmpty()) return
         scanJob = scope.launch { performScan() }
+    }
+
+    /** Refreshes the database tracks list for debug inspection. */
+    fun refreshDatabaseTracks() {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val trackDao = database.trackDao()
+                val sourceDao = database.sourceDao()
+                val graphDao = database.graphDao()
+                val rootDao = database.libraryRootDao()
+
+                val rootPriorities = rootDao.getAllByPriority().associate { it.rootId to it.priority }
+                val tracks = trackDao.getAll()
+                val items = tracks.map { track ->
+                    val activeSource = sourceDao.findActiveSource(track.trackId)
+                    val sources = sourceDao.findByTrack(track.trackId)
+                    val album = track.albumId?.let { graphDao.findAlbumById(it) }
+                    val artistRefs = graphDao.trackArtists(track.trackId)
+                    val artists = artistRefs.mapNotNull { graphDao.findArtistById(it.artistId)?.displayName }
+                    val genreRefs = graphDao.trackGenres(track.trackId)
+                    val genres = genreRefs.mapNotNull { graphDao.findGenreById(it.genreId)?.displayName }
+
+                    TrackInspectionItem(
+                        track = track,
+                        activeSourceId = activeSource?.sourceId,
+                        sources = sources.map { s ->
+                            SourceInspectionDetail(
+                                source = s,
+                                isActive = s.sourceId == activeSource?.sourceId,
+                                rootPriority = s.rootId?.let { rootPriorities[it] },
+                            )
+                        },
+                        albumTitle = album?.title,
+                        artists = artists,
+                        genres = genres,
+                    )
+                }
+
+                withContext(Dispatchers.Main) {
+                    inspectedTracks.clear()
+                    inspectedTracks.addAll(items)
+                }
+            }
+        }
     }
 
     /** Cancels the scan scope when the debug screen leaves composition. */
@@ -201,8 +261,8 @@ class SafDebugController(context: Context) {
     }
 
     private suspend fun performScan() {
-        val source = roots
-        if (source.isEmpty()) return
+        val currentRoots = roots
+        if (currentRoots.isEmpty()) return
 
         status = ScanStatus.Scanning
         totalFileCount = 0
@@ -214,57 +274,17 @@ class SafDebugController(context: Context) {
         errors.clear()
         rootErrors.clear()
 
-        val collector = ScanDocumentCollector()
         val startedAt = SystemClock.elapsedRealtime()
 
         try {
-            SafScanner.from(
-                    appContext,
-                    SafQuery(source = source, withHidden = false, multithread = true),
-                )
-                .scan()
-                .collect { event ->
-                    when (event) {
-                        is SafScanEvent.Found -> {
-                            val file = event.file
-                            val result =
-                                collector.accept(
-                                    documentKey = file.documentKey,
-                                    fileName = file.path.name.orEmpty(),
-                                    size = file.size,
-                                    rootLabel = file.root.path.toString(),
-                                    uri = file.uri,
-                                )
-                            when (result) {
-                                is DocumentAcceptResult.Duplicate -> Unit
-                                is DocumentAcceptResult.NewDocument -> {
-                                    totalFileCount = collector.documentCount
-                                    result.candidate?.let { candidate ->
-                                        candidates.add(candidate)
-                                        candidateCount = collector.candidateCount
-                                    }
-                                }
-                            }
-                        }
-                        is SafScanEvent.DirectoryUnavailable -> {
-                            val isRootError = event.path == event.root.path
-                            errors.add(
-                                ScanErrorItem(
-                                    rootUri = event.root.uri,
-                                    rootLabel = event.root.path.toString(),
-                                    pathLabel = event.path.toString(),
-                                    isRootError = isRootError,
-                                    message = event.cause.describe(),
-                                )
-                            )
-                            errorCount = errors.size
-                            if (isRootError) {
-                                rootErrors[event.root.uri] = event.cause.describe()
-                            }
-                        }
-                    }
-                }
+            val report = pipeline.executeScan(currentRoots)
+            totalFileCount = report.totalFilesDiscovered
+            candidateCount = report.audioCandidatesDiscovered
+            errorCount = report.unavailableDirectories
+
             status = ScanStatus.Completed
+            roots = rootRepository.getRoots()
+            refreshDatabaseTracks()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
