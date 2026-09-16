@@ -228,6 +228,7 @@ private fun StatusSection(controller: SafDebugController) {
             Text("发现文件总数: ${controller.totalFileCount}")
             Text("发现音频数量: ${controller.candidateCount}")
             Text("曲库曲目数量: ${controller.inspectedTracks.size}")
+            Text("元数据抽取缓存: HIT ${controller.cacheHits} / MISS ${controller.cacheMisses}")
             Text("错误数量: ${controller.errorCount}")
             Text("扫描耗时: ${formatDuration(controller.elapsedMs)}")
         }

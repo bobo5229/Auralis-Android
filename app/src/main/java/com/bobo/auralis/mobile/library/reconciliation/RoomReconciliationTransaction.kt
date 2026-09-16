@@ -50,6 +50,22 @@ class RoomReconciliationTransaction(
         scanSessionId: Long,
         timestamp: Long = System.currentTimeMillis(),
     ): TrackId = database.withTransaction {
+        reconcileObservationInternal(
+            resolved = resolved,
+            rootId = rootId,
+            scanSessionId = scanSessionId,
+            timestamp = timestamp,
+            autoRefreshActiveSource = true,
+        )
+    }
+
+    private suspend fun reconcileObservationInternal(
+        resolved: ResolvedObservation,
+        rootId: LibraryRootId?,
+        scanSessionId: Long,
+        timestamp: Long,
+        autoRefreshActiveSource: Boolean,
+    ): TrackId {
         val sourceDao = database.sourceDao()
         val trackDao = database.trackDao()
 
@@ -291,10 +307,46 @@ class RoomReconciliationTransaction(
         sourceDao.insertMetadata(snapshot)
 
         // 5. Select active source and project graph if winner changed (§40)
-        refreshActiveSourceForTrack(targetTrackId, timestamp)
+        if (autoRefreshActiveSource) {
+            refreshActiveSourceForTrack(targetTrackId, timestamp)
+        }
 
-        targetTrackId
+        return targetTrackId
     }
+
+    /**
+     * Batch-reconciles multiple observations in a single atomic Room transaction.
+     *
+     * Implements `docs/PHASE3B.md` §6 (batch DB write, 100–500 observations per batch).
+     * Reconciles sources and collects all affected tracks, refreshing their active sources
+     * and projecting graph once per affected track at the end of the batch.
+     */
+    suspend fun reconcileObservationsBatch(
+        batch: List<BatchItem>,
+        scanSessionId: Long,
+        timestamp: Long = System.currentTimeMillis(),
+    ) = database.withTransaction {
+        val affectedTracks = mutableSetOf<TrackId>()
+        for (item in batch) {
+            val trackId = reconcileObservationInternal(
+                resolved = item.resolved,
+                rootId = item.rootId,
+                scanSessionId = scanSessionId,
+                timestamp = timestamp,
+                autoRefreshActiveSource = false,
+            )
+            affectedTracks += trackId
+        }
+
+        for (trackId in affectedTracks) {
+            refreshActiveSourceForTrack(trackId, timestamp)
+        }
+    }
+
+    data class BatchItem(
+        val resolved: ResolvedObservation,
+        val rootId: LibraryRootId?,
+    )
 
     /**
      * Runs missing reconciliation for sources not seen in the completed scan session (§37, §46).

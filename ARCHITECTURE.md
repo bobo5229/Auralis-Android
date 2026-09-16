@@ -129,3 +129,27 @@ DataStore 只保存轻量设置，例如界面偏好、播放相关选项和其�
 - 原生部分使用 CMake + Android NDK 构建，TagLib 以源码子模块参与同一次 CMake 构建，不依赖 `sh`、WSL 或其他 Unix-only 脚本。
 - v1 的 native ABI 只编译 `arm64-v8a`。
 - 该层不引入 Room、播放链路、缓存或 UI 依赖。
+
+## 10. 曲库持久化与对账架构（Phase 3B 规范）
+
+### 10.1 核心分层（Logical Track vs Physical TrackSource）
+Auralis 严格解耦物理连续性与逻辑呈现：
+- **`TrackSourceEntity`（物理源）**：通过 `(provider, documentId)` 作为绝对物理连续性主键。文件重命名或跨目录移动时保持物理源连续；保存格式属性、文件修改时间（`modifiedMs`）、文件大小（`sizeBytes`）及可用性状态（`AVAILABLE` / `MISSING` / `UNREACHABLE`）。
+- **`TrackEntity`（逻辑曲目）**：业务和播放队列的主体，拥有独立的永久 `TrackId`（UUID）。
+- **`SourceMetadataEntity`（抽取缓存）**：为每个物理源保存最近一次成功解析的结构化元数据快照。
+- **`TrackActiveSourceEntity`（选优指针）**：指示当前逻辑曲目的胜出物理源。
+
+### 10.2 权威数据库与事务边界
+- Room 作为 Auralis 曲库的权威真源。
+- 扫描发现与 TagLib 抽取完全位于数据库事务外部；数据库持久化采用分批原子事务（100~200 条批量写入），避免长锁与高频 IO 瓶颈。
+- 只有成功扫描的 scope 内部失联源才标记为 `MISSING`；根目录整体故障或单目录不可达（`DirectoryUnavailable`）时保持 `UNREACHABLE`，绝对不误删曲目。
+
+### 10.3 抽取缓存体系（Hit / Stale / Miss）
+- 扫描器比对文件的 `(modifiedMs, sizeBytes)` 与数据库记录。
+- **HIT**：源未变更且曾成功解析，直接从 `SourceMetadataEntity` 水合内存对象，**零 JNI 调用、零底层文件 IO**。
+- **STALE / MISS**：新源或已修改文件触发 TagLib 重新抽取并更新缓存快照。
+
+### 10.4 墓碑与恢复机制（Tombstone & Reconnect）
+- 当某个逻辑曲目的所有物理源都确认缺失时，`TrackEntity` 不物理删除，作为 Tombstone 驻留。
+- 当具备相同 Strong TrackKey 的物理源重新出现时，自动重连恢复该 `TrackId`，确保播放历史与歌单引用不丢失。
+

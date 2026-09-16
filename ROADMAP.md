@@ -14,8 +14,8 @@
    验证四种目标格式在 AndroidX Media3 / ExoPlayer 播放链路中的可用性和异常表现。
 5. **元数据解析验证**
    验证支持格式的元数据读取、字段映射、多值分隔、日期、专辑身份和缺失字段处理。
-6. **Room 建库**
-   建立 Auralis 自己的本地数据库，保存曲库条目、目录状态、元数据和必要的错误信息。
+6. **Room 建库与曲库持久化对账（Phase 3A / 3B Complete）**
+   建立 Auralis 自己的本地数据库，区分逻辑曲目（Track）与物理源（TrackSource），实现元数据抽取缓存（Hit/Stale/Miss）、分批事务写入、多源选优与对账恢复。
 7. **Albums / Tracks 临时调试界面**
    提供仅用于验证建库和解析结果的临时 Albums / Tracks 界面，不作为正式产品 UI。
 8. **Media3 播放**

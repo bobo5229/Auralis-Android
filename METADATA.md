@@ -128,3 +128,23 @@ Disc Number 与 Track Number 共同参与曲目区分和专辑内排序。多碟
 多值字段中的每个独立值都可以单独命中搜索并用于浏览筛选。
 
 不搜索歌词内容。歌词只能作为播放页或相关音乐内容展示的一部分，不参与曲库搜索索引。
+
+## 8. 曲库身份键与投影规则（Phase 3B 冻结）
+
+### 8.1 文本规范化（IdentityTextNormalizer）
+- 仅执行 `trim()` 与 Unicode NFC 标准化。
+- 不做小写转换（不 lower-case），不做模糊音或别名归并（严格保留大小写语义）。
+
+### 8.2 专辑键（AlbumKeyV1）
+- 输入维度：`albumTitle` + `albumArtists`（规范化唯一有序集）+ `date`。
+- 生成 SHA-256 结构哈希。无专辑名称的文件不生成 `AlbumKey`，不创建共享 `AlbumEntity`（`albumId = null`）。
+
+### 8.3 曲目键（TrackKeyV1 与 TrackKeyStrength）
+- 输入维度：`AlbumKey`（或无专辑标识）+ `title` + `trackArtists`（规范化唯一有序集）+ `discNumber` + `trackNumber`。
+- **STRONG**：具备完整 `AlbumKey`、`title`、`discNumber`、`trackNumber` 与至少一个 `Artist`。
+- **WEAK**：缺少上述任一关键身份维度。Weak Key 仅作为单个物理文件回退索引，**绝不允许跨物理源自动合并为同一逻辑曲目**。
+
+### 8.4 逻辑元数据投影（Active Source Controls Logical Metadata）
+- 当同一个逻辑曲目存在多个物理源时，逻辑曲目（`TrackEntity`、`TrackArtistCrossRef`、`TrackGenreCrossRef`）的展示元数据完全由当前选优胜出的 **Active Source** 决定。
+- 物理源之间的非身份元数据（如不同的 Genre 或细微标签差异）**不做 union 混合**，遵循 **Active source wins** 原则。
+

@@ -76,6 +76,12 @@ class SafDebugController(context: Context) {
     var errorCount by mutableStateOf(0)
         private set
 
+    var cacheHits by mutableStateOf(0)
+        private set
+
+    var cacheMisses by mutableStateOf(0)
+        private set
+
     var elapsedMs by mutableStateOf(0L)
         private set
 
@@ -281,6 +287,8 @@ class SafDebugController(context: Context) {
             totalFileCount = report.totalFilesDiscovered
             candidateCount = report.audioCandidatesDiscovered
             errorCount = report.unavailableDirectories
+            cacheHits = report.cacheHits
+            cacheMisses = report.cacheMisses
 
             status = ScanStatus.Completed
             roots = rootRepository.getRoots()

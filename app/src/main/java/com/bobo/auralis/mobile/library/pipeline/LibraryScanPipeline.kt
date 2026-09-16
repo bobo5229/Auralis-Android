@@ -40,6 +40,8 @@ data class ScanSessionReport(
     val audioCandidatesDiscovered: Int,
     val parsedSuccessfully: Int,
     val parseFailed: Int,
+    val cacheHits: Int = 0,
+    val cacheMisses: Int = 0,
     val rootsAttempted: Int,
     val rootsCompleted: Int,
     val unavailableDirectories: Int,
@@ -122,12 +124,17 @@ class LibraryScanPipeline(
         var audioCandidates = 0
         var parsedSuccess = 0
         var parseFailed = 0
+        var cacheHits = 0
+        var cacheMisses = 0
         var unavailableDirs = 0
 
         val scanner = SafScanner.from(
             context = context,
             query = SafQuery(source = openedRoots, withHidden = false, multithread = true),
         )
+
+        val batch = mutableListOf<RoomReconciliationTransaction.BatchItem>()
+        val batchSize = 150
 
         scanner.scan().collect { event ->
             when (event) {
@@ -143,51 +150,91 @@ class LibraryScanPipeline(
                         val rootPriority = rootEntity?.priority ?: Int.MAX_VALUE
                         val rootId = rootEntity?.rootId
 
-                        // Step 1: Extract raw metadata outside DB transaction (§47)
-                        val extractResult = extractor.extract(MetadataTarget(file.uri, fileName))
+                        // Step 1: Check metadata extraction cache (PHASE 3B §5)
+                        val existingSource = sourceDao.findByDocumentKey(
+                            provider = file.documentKey.provider,
+                            documentId = file.documentKey.documentId,
+                        )
+                        val cachedMeta = existingSource?.let { sourceDao.findMetadata(it.sourceId) }
+                        val classification = com.bobo.auralis.mobile.library.cache.SourceMetadataCache.classify(
+                            file = file,
+                            existingSource = existingSource,
+                            cachedMetadata = cachedMeta,
+                        )
 
-                        if (extractResult is MetadataResult.Success && extractResult.metadata != null) {
-                            // Step 2: Interpret according to Auralis metadata rules (§43)
-                            val interpreted = extractResult.metadata.interpret()
+                        when (classification) {
+                            is com.bobo.auralis.mobile.library.cache.CacheClassification.Hit -> {
+                                cacheHits++
+                                parsedSuccess++
+                                // Hydrate observation instantly without file IO or TagLib JNI
+                                val hydrated = com.bobo.auralis.mobile.library.cache.SourceMetadataCache.hydrate(
+                                    hit = classification,
+                                    file = file,
+                                    rootPriority = rootPriority,
+                                    format = format,
+                                )
+                                batch.add(RoomReconciliationTransaction.BatchItem(hydrated, rootId))
+                            }
 
-                            // Step 3: Package into ObservedTrackSource and ResolvedObservation
-                            val rootRef = RootReference(
-                                treeUri = file.root.uri.toString(),
-                                priority = rootPriority,
-                            )
-                            val observation = ObservedTrackSource(
-                                documentKey = file.documentKey,
-                                root = rootRef,
-                                uri = file.uri,
-                                relativePath = file.path,
-                                fileName = fileName,
-                                sizeBytes = file.size,
-                                modifiedMs = file.modifiedMs,
-                                format = format,
-                                metadata = interpreted,
-                            )
-                            val identity = IdentityDerivation.derive(interpreted)
-                            val resolved = ResolvedObservation.of(observation, identity)
+                            is com.bobo.auralis.mobile.library.cache.CacheClassification.Stale,
+                            is com.bobo.auralis.mobile.library.cache.CacheClassification.Miss -> {
+                                cacheMisses++
+                                // Step 2: Fresh TagLib JNI extraction outside DB transaction
+                                val extractResult = extractor.extract(MetadataTarget(file.uri, fileName))
 
-                            // Step 4: Reconcile and project in Room transaction (§44, §40)
-                            transaction.reconcileObservation(
-                                resolved = resolved,
-                                rootId = rootId,
+                                if (extractResult is MetadataResult.Success && extractResult.metadata != null) {
+                                    val interpreted = extractResult.metadata.interpret()
+                                    val rootRef = RootReference(
+                                        treeUri = file.root.uri.toString(),
+                                        priority = rootPriority,
+                                    )
+                                    val observation = ObservedTrackSource(
+                                        documentKey = file.documentKey,
+                                        root = rootRef,
+                                        uri = file.uri,
+                                        relativePath = file.path,
+                                        fileName = fileName,
+                                        sizeBytes = file.size,
+                                        modifiedMs = file.modifiedMs,
+                                        format = format,
+                                        metadata = interpreted,
+                                    )
+                                    val identity = IdentityDerivation.derive(interpreted)
+                                    val resolved = ResolvedObservation.of(observation, identity)
+
+                                    batch.add(RoomReconciliationTransaction.BatchItem(resolved, rootId))
+                                    parsedSuccess++
+                                } else {
+                                    // Flush current batch before handling error
+                                    if (batch.isNotEmpty()) {
+                                        transaction.reconcileObservationsBatch(
+                                            batch = batch.toList(),
+                                            scanSessionId = scanSessionId,
+                                            timestamp = startedAtSystem,
+                                        )
+                                        batch.clear()
+                                    }
+                                    recordFailedSource(
+                                        file = file,
+                                        format = format,
+                                        rootId = rootId,
+                                        scanSessionId = scanSessionId,
+                                        extractResult = extractResult,
+                                        timestamp = startedAtSystem,
+                                    )
+                                    parseFailed++
+                                }
+                            }
+                        }
+
+                        // Flush batch if threshold reached (§6)
+                        if (batch.size >= batchSize) {
+                            transaction.reconcileObservationsBatch(
+                                batch = batch.toList(),
                                 scanSessionId = scanSessionId,
                                 timestamp = startedAtSystem,
                             )
-                            parsedSuccess++
-                        } else {
-                            // Parsing failed or not audio; record source state as FAILED
-                            recordFailedSource(
-                                file = file,
-                                format = format,
-                                rootId = rootId,
-                                scanSessionId = scanSessionId,
-                                extractResult = extractResult,
-                                timestamp = startedAtSystem,
-                            )
-                            parseFailed++
+                            batch.clear()
                         }
                     }
                 }
@@ -199,6 +246,16 @@ class LibraryScanPipeline(
                     }
                 }
             }
+        }
+
+        // Flush any remaining observations in batch
+        if (batch.isNotEmpty()) {
+            transaction.reconcileObservationsBatch(
+                batch = batch.toList(),
+                scanSessionId = scanSessionId,
+                timestamp = startedAtSystem,
+            )
+            batch.clear()
         }
 
         // Missing reconciliation (§37, §46):
@@ -235,6 +292,8 @@ class LibraryScanPipeline(
             audioCandidatesDiscovered = audioCandidates,
             parsedSuccessfully = parsedSuccess,
             parseFailed = parseFailed,
+            cacheHits = cacheHits,
+            cacheMisses = cacheMisses,
             rootsAttempted = roots.size,
             rootsCompleted = completedCount,
             unavailableDirectories = unavailableDirs,

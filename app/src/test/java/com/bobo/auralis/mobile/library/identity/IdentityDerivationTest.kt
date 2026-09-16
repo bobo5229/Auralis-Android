@@ -126,6 +126,47 @@ class IdentityDerivationTest {
         )
     }
 
+    @Test
+    fun `album artist ordering change does not change AlbumKey`() {
+        val first = auralisMetadata(album = "Album", albumArtists = listOf("Artist A", "Artist B"))
+        val second = auralisMetadata(album = "Album", albumArtists = listOf("Artist B", "Artist A"))
+        assertEquals(
+            IdentityDerivation.derive(first).albumKey,
+            IdentityDerivation.derive(second).albumKey,
+        )
+    }
+
+    @Test
+    fun `genre change does not change TrackKey`() {
+        val pop = auralisMetadata(title = "Song", artists = listOf("Artist"), album = "Album", genres = listOf("Pop"))
+        val rock = pop.copy(genres = listOf("Rock", "Metal"))
+        assertEquals(
+            IdentityDerivation.derive(pop).trackKey,
+            IdentityDerivation.derive(rock).trackKey,
+        )
+    }
+
+    @Test
+    fun `codec bitrate sample rate changes do not change TrackKey`() {
+        val base = auralisMetadata(
+            title = "Song",
+            artists = listOf("Artist"),
+            album = "Album",
+            bitrateKbps = 320,
+            sampleRateHz = 44100,
+            mimeType = "audio/mp3",
+        )
+        val hiresFlac = base.copy(
+            bitrateKbps = 1411,
+            sampleRateHz = 96000,
+            mimeType = "audio/flac",
+        )
+        assertEquals(
+            IdentityDerivation.derive(base).trackKey,
+            IdentityDerivation.derive(hiresFlac).trackKey,
+        )
+    }
+
     /**
      * Property names of a Kotlin class, ignoring compiler-generated members such
      * as a `Companion` object or the `$stable` marker the Compose plugin adds.
