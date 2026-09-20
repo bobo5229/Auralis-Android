@@ -35,7 +35,73 @@ Auxio / Musikr 使用 GPL-3.0-or-later。上述代码进入 Auralis Mobile 后�
 - 向接收者提供完整对应源代码；
 - 保留版权声明、来源说明与许可证文本。
 
-当前仓库尚未包含顶层 `LICENSE` 文件。在对外分发（发布 APK、上传应用商店或公开构建产物）
-之前，必须补充 GPL-3.0 许可证并确认整个项目的许可策略。
+当前仓库顶层 `LICENSE` 已包含 GNU GPL v3 许可证文本。对外分发（发布 APK、上传应用商店或
+公开构建产物）时，仍须提供完整对应源代码并保留本文件中的来源与版权说明。
 
 上述许可证全文见：<https://www.gnu.org/licenses/gpl-3.0.html>
+
+## AndroidX Media3 示例
+
+- 上游仓库：<https://github.com/androidx/media>
+- 参考文件：`demos/session_service/.../DemoPlaybackService.kt` 与
+  `DemoMediaLibrarySessionCallback.kt`
+- 参考版本：tag `1.11.1`，commit `8c6678b657ede1e7883fc164ef73ed483c7796c3`
+- 上游许可证：Apache License 2.0
+- 版权：Copyright 2023 The Android Open Source Project
+
+`AuralisPlaybackService.kt` 的 Service / Session 生命周期结构基于官方示例适配；
+曲库解析、身份映射和播放可用性回写为 Auralis 自有实现。
+
+## AndroidLiquidGlass / Backdrop
+
+- 上游仓库：<https://github.com/Kyant0/AndroidLiquidGlass>
+- 使用组件：`io.github.kyant0:backdrop:2.0.0`
+- 审计参考 commit：`65ab177e90e5c1d8c62e70cf7755841982da65f6`
+- 上游许可证：Apache License 2.0
+- 版权：Copyright 2025 Kyant
+
+Auralis 通过 Maven 依赖复用 Backdrop 的背景采样、模糊、鲜明度与透镜效果，用于悬浮导航、
+独立搜索按钮和迷你播放器。产品布局、状态、导航语义与降级策略由 Auralis 自行实现；未复制
+上游示例组件源码。具体版本与兼容性决策见 `docs/LIQUID_GLASS_REUSE_AUDIT.md`。
+
+## Coil
+
+- 上游项目：<https://github.com/coil-kt/coil>
+- 使用组件：`io.coil-kt.coil3:coil-compose:3.3.0`
+- 上游许可证：Apache License 2.0
+- 版权：Copyright 2026 Coil Contributors
+
+Auralis 使用 Coil 负责本地专辑封面的异步解码、尺寸采样、Compose 展示以及内存/磁盘缓存。
+项目未引入 Coil 的网络组件，应用仍不申请 `INTERNET` 权限。SAF 音频内嵌封面与同目录
+`cover` / `COVER` 的来源选择由 Auralis 按 `METADATA.md` 实现。
+
+## TinyPinyin
+
+- 上游项目：<https://github.com/tyzlmjj/TinyPinyin>
+- 使用组件：`me.majiajie:tinypinyin:2.0.3`
+- 原始项目：<https://github.com/promeG/TinyPinyin>
+- 上游许可证：Apache License 2.0
+- 传递依赖：`org.ahocorasick:ahocorasick:0.6.3`（Apache License 2.0）
+
+Auralis 使用 TinyPinyin 在内存中为 Album Artist 生成拉丁字母排序键，使中文名能够按拼音与
+拉丁字母名称混合排序。转换结果不写入数据库，也不改变元数据和界面中的艺术家原文。
+
+## AndroidX Palette
+
+- 上游项目：<https://developer.android.com/jetpack/androidx/releases/palette>
+- 使用组件：`androidx.palette:palette:1.0.0`
+- 上游许可证：Apache License 2.0
+
+Auralis 使用 AndroidX Palette 从 Coil 已解码并缓存的专辑封面中提取代表色，用于收纳态
+播放进度轨道。结果只保存在进程内存中，不写入曲库数据库，也不改变封面文件。
+
+## Noto Serif SC
+
+- 上游仓库：<https://github.com/google/fonts/tree/main/ofl/notoserifsc>
+- 固定版本：Google Fonts commit `2e61f4355afd22b801791b0df176065082423b87`
+- 使用内容：Noto Serif SC Black，仅保留“资料库”三个字所需字形的字体子集
+- 上游许可证：SIL Open Font License 1.1
+- 版权：Copyright 2012 Google Inc. All Rights Reserved.
+
+Auralis 将该字体子集离线打包，仅用于资料库页面标题，不产生运行时网络请求。许可证全文随应用源码保存在
+`app/src/main/res/raw/ofl_noto_serif_sc.txt`。

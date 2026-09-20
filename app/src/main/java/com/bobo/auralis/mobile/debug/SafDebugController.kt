@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
+import com.bobo.auralis.mobile.library.db.entity.AlbumEntity
 import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
 import com.bobo.auralis.mobile.library.metadata.MetadataExtractor
@@ -17,10 +18,17 @@ import com.bobo.auralis.mobile.library.metadata.MetadataTarget
 import com.bobo.auralis.mobile.library.metadata.RawMetadataDisplay
 import com.bobo.auralis.mobile.library.metadata.interpret
 import com.bobo.auralis.mobile.library.metadata.toRawDisplay
+import com.bobo.auralis.mobile.diagnostics.DiagnosticExportFormat
+import com.bobo.auralis.mobile.diagnostics.DiagnosticReportFormatter
+import com.bobo.auralis.mobile.diagnostics.buildDiagnosticReport
 import com.bobo.auralis.mobile.library.pipeline.LibraryScanPipeline
+import com.bobo.auralis.mobile.library.pipeline.ScanSessionReport
+import com.bobo.auralis.mobile.library.model.AlbumId
 import com.bobo.auralis.mobile.library.saf.LibraryRootRepository
 import com.bobo.auralis.mobile.library.saf.SafLocation
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
+import com.bobo.auralis.mobile.playback.PlaybackConnectionState
+import com.bobo.auralis.mobile.playback.PlaybackControllerConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +66,7 @@ class SafDebugController(context: Context) {
     private val database = AuralisDatabase.get(appContext)
     private val rootRepository = LibraryRootRepository(appContext, database)
     private val pipeline = LibraryScanPipeline(appContext, database)
+    private val playbackConnection = PlaybackControllerConnection(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var scanJob: Job? = null
 
@@ -85,6 +94,15 @@ class SafDebugController(context: Context) {
     var elapsedMs by mutableStateOf(0L)
         private set
 
+    private var latestScanReport: ScanSessionReport? = null
+    private var latestScanFailure: String? = null
+
+    var isExportingDiagnostics by mutableStateOf(false)
+        private set
+
+    var diagnosticMessage by mutableStateOf<String?>(null)
+        private set
+
     /** Transient action/scan error, shown at the top of the debug page. */
     var message by mutableStateOf<String?>(null)
         private set
@@ -94,6 +112,12 @@ class SafDebugController(context: Context) {
 
     /** Reconciled logical tracks and their physical sources from Room database (§62). */
     val inspectedTracks = mutableStateListOf<TrackInspectionItem>()
+
+    /** Real AlbumEntity groups for the temporary Albums inspection view. */
+    val inspectedAlbums = mutableStateListOf<AlbumInspectionItem>()
+
+    var playback by mutableStateOf(PlaybackConnectionState())
+        private set
 
     /** Selected audio candidate and its raw metadata extraction result. */
     var selectedCandidate by mutableStateOf<CandidateAudio?>(null)
@@ -115,6 +139,9 @@ class SafDebugController(context: Context) {
         scope.launch {
             roots = rootRepository.initialize()
             refreshDatabaseTracks()
+        }
+        scope.launch {
+            playbackConnection.state.collect { playback = it }
         }
     }
 
@@ -228,10 +255,18 @@ class SafDebugController(context: Context) {
 
                 val rootPriorities = rootDao.getAllByPriority().associate { it.rootId to it.priority }
                 val tracks = trackDao.getAll()
+                val albumDetails = mutableMapOf<AlbumId, Pair<AlbumEntity, List<String>>>()
                 val items = tracks.map { track ->
                     val activeSource = sourceDao.findActiveSource(track.trackId)
                     val sources = sourceDao.findByTrack(track.trackId)
                     val album = track.albumId?.let { graphDao.findAlbumById(it) }
+                    val albumArtists = album?.let { entity ->
+                        albumDetails.getOrPut(entity.albumId) {
+                            val names = graphDao.albumArtists(entity.albumId)
+                                .mapNotNull { graphDao.findArtistById(it.artistId)?.displayName }
+                            entity to names
+                        }.second
+                    }.orEmpty()
                     val artistRefs = graphDao.trackArtists(track.trackId)
                     val artists = artistRefs.mapNotNull { graphDao.findArtistById(it.artistId)?.displayName }
                     val genreRefs = graphDao.trackGenres(track.trackId)
@@ -248,6 +283,8 @@ class SafDebugController(context: Context) {
                             )
                         },
                         albumTitle = album?.title,
+                        albumDate = album?.date,
+                        albumArtists = albumArtists,
                         artists = artists,
                         genres = genres,
                     )
@@ -256,13 +293,66 @@ class SafDebugController(context: Context) {
                 withContext(Dispatchers.Main) {
                     inspectedTracks.clear()
                     inspectedTracks.addAll(items)
+                    inspectedAlbums.clear()
+                    inspectedAlbums.addAll(buildAlbumInspectionItems(items))
                 }
+            }
+        }
+    }
+
+    fun playOrToggle(item: TrackInspectionItem) {
+        val canToggleCurrent =
+            playback.currentMediaId == item.track.trackId.toString() &&
+                playback.error == null &&
+                playback.playbackState in setOf(
+                    androidx.media3.common.Player.STATE_BUFFERING,
+                    androidx.media3.common.Player.STATE_READY,
+                )
+        if (canToggleCurrent) {
+            playbackConnection.togglePlayPause()
+        } else {
+            playbackConnection.play(item.track.trackId)
+        }
+    }
+
+    fun stopPlayback() {
+        playbackConnection.stop()
+    }
+
+    fun diagnosticFileName(format: DiagnosticExportFormat): String =
+        DiagnosticReportFormatter.suggestedFileName(format, System.currentTimeMillis())
+
+    fun exportDiagnostics(uri: Uri?, format: DiagnosticExportFormat) {
+        if (uri == null || isExportingDiagnostics) return
+        scope.launch {
+            isExportingDiagnostics = true
+            diagnosticMessage = null
+            try {
+                withContext(Dispatchers.IO) {
+                    val report = buildDiagnosticReport(
+                        generatedAt = System.currentTimeMillis(),
+                        roots = database.libraryRootDao().getAllByPriority(),
+                        sources = database.sourceDao().getAll(),
+                        latestScan = latestScanReport,
+                        latestScanFailure = latestScanFailure,
+                    )
+                    val content = DiagnosticReportFormatter.format(report, format)
+                    val stream = appContext.contentResolver.openOutputStream(uri, "wt")
+                        ?: error("目标文档无法打开")
+                    stream.bufferedWriter(Charsets.UTF_8).use { writer -> writer.write(content) }
+                }
+                diagnosticMessage = "诊断日志已导出"
+            } catch (e: Exception) {
+                diagnosticMessage = "诊断日志导出失败: ${e.describe()}"
+            } finally {
+                isExportingDiagnostics = false
             }
         }
     }
 
     /** Cancels the scan scope when the debug screen leaves composition. */
     fun close() {
+        playbackConnection.release()
         scope.cancel()
     }
 
@@ -279,16 +369,34 @@ class SafDebugController(context: Context) {
         candidates.clear()
         errors.clear()
         rootErrors.clear()
+        diagnosticMessage = null
+        latestScanReport = null
+        latestScanFailure = null
 
         val startedAt = SystemClock.elapsedRealtime()
 
         try {
             val report = pipeline.executeScan(currentRoots)
+            latestScanReport = report
             totalFileCount = report.totalFilesDiscovered
             candidateCount = report.audioCandidatesDiscovered
-            errorCount = report.unavailableDirectories
+            errorCount = report.unavailableDirectories + report.parseFailed
             cacheHits = report.cacheHits
             cacheMisses = report.cacheMisses
+            report.directoryFailures.forEach { failure ->
+                val rootUri = Uri.parse(failure.rootUri)
+                val rootLabel = currentRoots.firstOrNull { it.treeUri == failure.rootUri }?.displayPath
+                    ?: failure.rootPath
+                val item = ScanErrorItem(
+                    rootUri = rootUri,
+                    rootLabel = rootLabel,
+                    pathLabel = failure.path,
+                    isRootError = failure.path == failure.rootPath,
+                    message = listOfNotNull(failure.code, failure.message).joinToString(": "),
+                )
+                errors += item
+                if (item.isRootError) rootErrors[rootUri] = item.message
+            }
 
             status = ScanStatus.Completed
             roots = rootRepository.getRoots()
@@ -297,7 +405,8 @@ class SafDebugController(context: Context) {
             throw e
         } catch (e: Exception) {
             status = ScanStatus.Failed
-            message = "扫描失败: ${e.describe()}"
+            latestScanFailure = e.describe()
+            message = "扫描失败: $latestScanFailure"
         } finally {
             elapsedMs = SystemClock.elapsedRealtime() - startedAt
         }

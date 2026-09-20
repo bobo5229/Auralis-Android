@@ -45,6 +45,16 @@ data class ScanSessionReport(
     val rootsAttempted: Int,
     val rootsCompleted: Int,
     val unavailableDirectories: Int,
+    val directoryFailures: List<DirectoryScanFailure> = emptyList(),
+)
+
+/** A recoverable SAF directory query failure captured for diagnostic export. */
+data class DirectoryScanFailure(
+    val rootUri: String,
+    val rootPath: String,
+    val path: String,
+    val code: String,
+    val message: String?,
 )
 
 /**
@@ -127,6 +137,7 @@ class LibraryScanPipeline(
         var cacheHits = 0
         var cacheMisses = 0
         var unavailableDirs = 0
+        val directoryFailures = mutableListOf<DirectoryScanFailure>()
 
         val scanner = SafScanner.from(
             context = context,
@@ -241,6 +252,13 @@ class LibraryScanPipeline(
 
                 is SafScanEvent.DirectoryUnavailable -> {
                     unavailableDirs++
+                    directoryFailures += DirectoryScanFailure(
+                        rootUri = event.root.uri.toString(),
+                        rootPath = event.root.path.toString(),
+                        path = event.path.toString(),
+                        code = event.cause::class.java.simpleName,
+                        message = event.cause.message,
+                    )
                     if (event.path == event.root.path) {
                         failedRootUris += event.root.uri.toString()
                     }
@@ -297,6 +315,7 @@ class LibraryScanPipeline(
             rootsAttempted = roots.size,
             rootsCompleted = completedCount,
             unavailableDirectories = unavailableDirs,
+            directoryFailures = directoryFailures.toList(),
         )
     }
 

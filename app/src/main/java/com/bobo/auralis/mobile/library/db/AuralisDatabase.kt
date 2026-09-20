@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.bobo.auralis.mobile.library.db.dao.GraphDao
 import com.bobo.auralis.mobile.library.db.dao.LibraryRootDao
+import com.bobo.auralis.mobile.library.db.dao.LibraryBrowserDao
 import com.bobo.auralis.mobile.library.db.dao.SourceDao
 import com.bobo.auralis.mobile.library.db.dao.TrackDao
 import com.bobo.auralis.mobile.library.db.entity.AlbumArtistCrossRef
@@ -70,6 +71,8 @@ import com.bobo.auralis.mobile.library.db.entity.TrackSourceEntity
 abstract class AuralisDatabase : RoomDatabase() {
 
     abstract fun libraryRootDao(): LibraryRootDao
+
+    abstract fun libraryBrowserDao(): LibraryBrowserDao
 
     abstract fun trackDao(): TrackDao
 

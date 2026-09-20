@@ -38,10 +38,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.Player
+import com.bobo.auralis.mobile.diagnostics.DiagnosticExportFormat
 import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
 import com.bobo.auralis.mobile.library.metadata.RawMetadataDisplay
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
+
+private enum class LibraryInspectionView(val label: String) {
+    Overview("概览"),
+    Albums("专辑"),
+    Tracks("曲目"),
+}
 
 /**
  * Technical Spike Phase 3A debug inspection screen.
@@ -55,11 +63,20 @@ import com.bobo.auralis.mobile.library.scan.CandidateAudio
 fun SafDebugScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val controller = remember { SafDebugController(context.applicationContext) }
+    var selectedView by remember { mutableStateOf(LibraryInspectionView.Overview) }
     DisposableEffect(controller) { onDispose { controller.close() } }
 
     val treePicker =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             controller.addRoot(uri)
+        }
+    val textDiagnosticExporter =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(DiagnosticExportFormat.TEXT.mimeType)) { uri ->
+            controller.exportDiagnostics(uri, DiagnosticExportFormat.TEXT)
+        }
+    val jsonDiagnosticExporter =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(DiagnosticExportFormat.JSON.mimeType)) { uri ->
+            controller.exportDiagnostics(uri, DiagnosticExportFormat.JSON)
         }
 
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
@@ -68,7 +85,7 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { Text("Auralis Phase 3A Inspection", style = MaterialTheme.typography.headlineSmall) }
+            item { Text("Auralis Library Inspection", style = MaterialTheme.typography.headlineSmall) }
             item {
                 Text(
                     "技术验证页：Room 数据库图谱、对账结果与真机 SAF 行为验收",
@@ -76,23 +93,39 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                 )
             }
 
-            item { StatusSection(controller) }
-
-            // Metadata Detail Card
-            if (controller.isExtracting) {
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                            Text("正在通过 TagLib 提取原始元数据...")
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    LibraryInspectionView.entries.forEach { view ->
+                        if (view == selectedView) {
+                            Button(onClick = { selectedView = view }) { Text(view.label) }
+                        } else {
+                            OutlinedButton(onClick = { selectedView = view }) { Text(view.label) }
                         }
                     }
                 }
             }
+
+            if (selectedView == LibraryInspectionView.Overview) {
+                item { StatusSection(controller) }
+
+                // Metadata Detail Card
+                if (controller.isExtracting) {
+                    item {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                Text("正在通过 TagLib 提取原始元数据...")
+                            }
+                        }
+                    }
+                }
 
             controller.inspectError?.let { err ->
                 item {
@@ -148,6 +181,36 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                     }
                 }
             }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("诊断日志", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                textDiagnosticExporter.launch(
+                                    controller.diagnosticFileName(DiagnosticExportFormat.TEXT),
+                                )
+                            },
+                            enabled = !controller.isScanning && !controller.isExportingDiagnostics,
+                        ) {
+                            Text("导出 TXT")
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                jsonDiagnosticExporter.launch(
+                                    controller.diagnosticFileName(DiagnosticExportFormat.JSON),
+                                )
+                            },
+                            enabled = !controller.isScanning && !controller.isExportingDiagnostics,
+                        ) {
+                            Text("导出 JSON")
+                        }
+                    }
+                    controller.diagnosticMessage?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
 
             if (controller.roots.isEmpty()) {
                 item {
@@ -191,30 +254,138 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                 }
             }
 
-            // §62: Reconciled Database Tracks Inspection Section
-            item {
-                Text(
-                    "数据库逻辑曲目 (${controller.inspectedTracks.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
             }
-            if (controller.inspectedTracks.isEmpty()) {
+
+            if (selectedView == LibraryInspectionView.Albums) {
                 item {
                     Text(
-                        "数据库暂无曲目，完成扫描后将在此展示 TrackId、TrackKey、Active Source 及完整图谱关系。",
-                        style = MaterialTheme.typography.bodyMedium,
+                        "数据库专辑 (${controller.inspectedAlbums.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (controller.inspectedTracks.isEmpty()) {
+                    item {
+                        Text(
+                            "数据库暂无曲目，完成扫描后将在此按真实 AlbumId 展示专辑。",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else if (controller.inspectedAlbums.isEmpty()) {
+                    item {
+                        Text(
+                            "当前曲目均缺少 Album，不创建共享的未知专辑实体。",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                items(
+                    items = controller.inspectedAlbums,
+                    key = { it.albumId.value.toString() },
+                ) { album ->
+                    AlbumInspectionCard(album)
+                }
+
+                val albumlessTracks = controller.inspectedTracks
+                    .filter { it.track.albumId == null }
+                    .sortedForAlbumInspection()
+                if (albumlessTracks.isNotEmpty()) {
+                    item {
+                        Text(
+                            "无 Album 实体的曲目 (${albumlessTracks.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    items(
+                        items = albumlessTracks,
+                        key = { "albumless-${it.track.trackId.value}" },
+                    ) { track ->
+                        AlbumTrackRow(track)
+                    }
+                }
+            }
+
+            if (selectedView == LibraryInspectionView.Tracks) {
+                // §62: Reconciled Database Tracks Inspection Section
+                item {
+                    Text(
+                        "数据库逻辑曲目 (${controller.inspectedTracks.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                item {
+                    PlaybackStatusCard(
+                        controller = controller,
+                        onStop = controller::stopPlayback,
+                    )
+                }
+                if (controller.inspectedTracks.isEmpty()) {
+                    item {
+                        Text(
+                            "数据库暂无曲目，完成扫描后将在此展示 TrackId、TrackKey、Active Source 及完整图谱关系。",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                items(
+                    items = controller.inspectedTracks,
+                    key = { it.track.trackId.value.toString() },
+                ) { item ->
+                    TrackInspectionCard(
+                        item = item,
+                        currentMediaId = controller.playback.currentMediaId,
+                        isPlaying = controller.playback.isPlaying,
+                        isConnected = controller.playback.isConnected,
+                        onPlayOrToggle = { controller.playOrToggle(item) },
                     )
                 }
             }
-            items(
-                items = controller.inspectedTracks,
-                key = { it.track.trackId.value.toString() },
-            ) { item ->
-                TrackInspectionCard(item)
+        }
+    }
+}
+
+@Composable
+private fun PlaybackStatusCard(
+    controller: SafDebugController,
+    onStop: () -> Unit,
+) {
+    val playback = controller.playback
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Media3 播放验证", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "服务: ${if (playback.isConnected) "已连接" else "连接中"} · 状态: ${playbackStateLabel(playback.playbackState, playback.isPlaying)}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "TrackId: ${playback.currentMediaId ?: "无"}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            playback.error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedButton(
+                onClick = onStop,
+                enabled = playback.isConnected && playback.currentMediaId != null,
+            ) {
+                Text("停止")
             }
         }
     }
+}
+
+private fun playbackStateLabel(state: Int, isPlaying: Boolean): String = when {
+    isPlaying -> "播放中"
+    state == Player.STATE_BUFFERING -> "缓冲中"
+    state == Player.STATE_READY -> "已暂停"
+    state == Player.STATE_ENDED -> "已结束"
+    else -> "空闲"
 }
 
 @Composable
@@ -228,6 +399,7 @@ private fun StatusSection(controller: SafDebugController) {
             Text("发现文件总数: ${controller.totalFileCount}")
             Text("发现音频数量: ${controller.candidateCount}")
             Text("曲库曲目数量: ${controller.inspectedTracks.size}")
+            Text("曲库专辑数量: ${controller.inspectedAlbums.size}")
             Text("元数据抽取缓存: HIT ${controller.cacheHits} / MISS ${controller.cacheMisses}")
             Text("错误数量: ${controller.errorCount}")
             Text("扫描耗时: ${formatDuration(controller.elapsedMs)}")
@@ -236,7 +408,105 @@ private fun StatusSection(controller: SafDebugController) {
 }
 
 @Composable
-private fun TrackInspectionCard(item: TrackInspectionItem) {
+private fun AlbumInspectionCard(album: AlbumInspectionItem) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = album.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = if (album.albumArtists.isEmpty()) {
+                    "未知 Album Artist"
+                } else {
+                    album.albumArtists.joinToString(" ; ")
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = "Date: ${album.date ?: "未知"} · Active ${album.activeTrackCount}/${album.tracks.size}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "AlbumId: ${album.albumId.value}",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            HorizontalDivider()
+            album.tracks.forEach { track -> AlbumTrackRow(track) }
+        }
+    }
+}
+
+@Composable
+private fun AlbumTrackRow(item: TrackInspectionItem) {
+    val position = buildString {
+        append(item.track.discNumber ?: "–")
+        append('.')
+        append(item.track.trackNumber ?: "–")
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (item.activeSourceId != null) {
+                MaterialTheme.colorScheme.surface
+            } else {
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+            },
+        ),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = position,
+                style = MaterialTheme.typography.labelMedium,
+                fontFamily = FontFamily.Monospace,
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.track.title ?: "未知 Title",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (item.artists.isEmpty()) "未知 Artist" else item.artists.joinToString(" ; "),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = if (item.activeSourceId != null) "ACTIVE" else "TOMBSTONE",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (item.activeSourceId != null) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrackInspectionCard(
+    item: TrackInspectionItem,
+    currentMediaId: String?,
+    isPlaying: Boolean,
+    isConnected: Boolean,
+    onPlayOrToggle: () -> Unit,
+) {
+    val isCurrent = currentMediaId == item.track.trackId.toString()
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -265,6 +535,19 @@ private fun TrackInspectionCard(item: TrackInspectionItem) {
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = if (item.activeSourceId != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            }
+
+            Button(
+                onClick = onPlayOrToggle,
+                enabled = isConnected && item.activeSourceId != null,
+            ) {
+                Text(
+                    when {
+                        isCurrent && isPlaying -> "暂停"
+                        isCurrent -> "继续播放"
+                        else -> "播放 Active Source"
+                    },
                 )
             }
 
