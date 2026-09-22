@@ -413,6 +413,7 @@ private fun AlbumMorphingItem(
                 AlbumText(
                     album = album,
                     compact = isGrid && (layoutMode.gridColumns ?: 1) >= 4,
+                    showDate = isGrid && layoutMode.gridColumns == 1,
                 )
             },
             modifier = Modifier.fillMaxWidth(),
@@ -448,14 +449,27 @@ private fun AlbumMorphingItem(
 }
 
 @Composable
-private fun AlbumText(album: LibraryAlbum, compact: Boolean = false) {
+private fun AlbumText(album: LibraryAlbum, compact: Boolean = false, showDate: Boolean = false) {
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            album.title,
-            style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                album.title,
+                modifier = Modifier.weight(1f).alignByBaseline(),
+                style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (showDate) {
+                Text(
+                    album.date ?: "未知日期",
+                    modifier = Modifier.alignByBaseline(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+        }
         Text(
             album.albumArtistLabel,
             style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodyMedium,

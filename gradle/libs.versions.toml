@@ -17,7 +17,6 @@ backdrop = "2.0.0"
 coil = "3.3.0"
 datastore = "1.2.1"
 tinyPinyin = "2.0.3"
-palette = "1.0.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -49,7 +48,6 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 tiny-pinyin = { group = "me.majiajie", name = "tinypinyin", version.ref = "tinyPinyin" }
-androidx-palette = { group = "androidx.palette", name = "palette", version.ref = "palette" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

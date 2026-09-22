@@ -79,7 +79,6 @@ dependencies {
     implementation(libs.backdrop)
     implementation(libs.coil.compose)
     implementation(libs.tiny.pinyin)
-    implementation(libs.androidx.palette)
     ksp(libs.androidx.room.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

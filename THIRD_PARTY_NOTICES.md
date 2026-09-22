@@ -86,14 +86,18 @@ Auralis 使用 Coil 负责本地专辑封面的异步解码、尺寸采样、Com
 Auralis 使用 TinyPinyin 在内存中为 Album Artist 生成拉丁字母排序键，使中文名能够按拼音与
 拉丁字母名称混合排序。转换结果不写入数据库，也不改变元数据和界面中的艺术家原文。
 
-## AndroidX Palette
+## Material Color Utilities
 
-- 上游项目：<https://developer.android.com/jetpack/androidx/releases/palette>
-- 使用组件：`androidx.palette:palette:1.0.0`
+- 上游项目：<https://github.com/material-foundation/material-color-utilities>
+- 固定 commit：`5b3618b16fdc3825e21d5679bafd144662088ea1`
+- 使用内容：Celebi、Score、HCT 及必要依赖，共 15 个 Java 源文件
 - 上游许可证：Apache License 2.0
+- 版权：Google LLC，保留各文件原始版权声明
 
-Auralis 使用 AndroidX Palette 从 Coil 已解码并缓存的专辑封面中提取代表色，用于收纳态
-播放进度轨道。结果只保存在进程内存中，不写入曲库数据库，也不改变封面文件。
+Auralis 使用官方算法从专辑封面提取代表色并调整深浅主题下的轨道颜色。源码位于
+`app/src/main/java/com/bobo/auralis/mobile/thirdparty/materialcolorutilities`，许可证全文随源码保存。
+调整 package/import 命名空间，并将 `QuantizerWu` 的 switch 改为等价 Java 11 语法，未修改上游算法；中性色回退和主题 Tone 范围由应用层负责。
+结果只保存在进程内存中，不写入曲库数据库，也不改变封面文件。
 
 ## Noto Serif SC
 
