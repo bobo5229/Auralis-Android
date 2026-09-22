@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bobo.auralis.mobile.ui.demo.AuralisDemoApp
+import com.bobo.auralis.mobile.playback.PlaybackMode
+import com.bobo.auralis.mobile.playback.PlaybackPreferencesRepository
 import com.bobo.auralis.mobile.ui.theme.AppearancePreferencesRepository
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutAnimationStyle
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutMode
@@ -23,6 +25,9 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val appearancePreferences by lazy {
         AppearancePreferencesRepository(applicationContext)
+    }
+    private val playbackPreferences by lazy {
+        PlaybackPreferencesRepository(applicationContext)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,6 +42,9 @@ class MainActivity : ComponentActivity() {
             )
             val albumLayoutAnimationStyle by appearancePreferences.albumLayoutAnimationStyle
                 .collectAsStateWithLifecycle(initialValue = AlbumLayoutAnimationStyle.Fade)
+            val playbackMode by playbackPreferences.playbackMode.collectAsStateWithLifecycle(
+                initialValue = PlaybackMode.Sequential,
+            )
             val coroutineScope = rememberCoroutineScope()
             val useDarkColors = themeMode.usesDarkColors(isSystemInDarkTheme())
             val view = LocalView.current
@@ -51,6 +59,7 @@ class MainActivity : ComponentActivity() {
                     themeMode = themeMode,
                     albumLayoutMode = albumLayoutMode,
                     albumLayoutAnimationStyle = albumLayoutAnimationStyle,
+                    playbackMode = playbackMode,
                     onThemeModeSelected = { selectedMode ->
                         coroutineScope.launch {
                             appearancePreferences.setThemeMode(selectedMode)
@@ -64,6 +73,11 @@ class MainActivity : ComponentActivity() {
                     onAlbumLayoutAnimationStyleSelected = { selectedStyle ->
                         coroutineScope.launch {
                             appearancePreferences.setAlbumLayoutAnimationStyle(selectedStyle)
+                        }
+                    },
+                    onPlaybackModeSelected = { selectedMode ->
+                        coroutineScope.launch {
+                            playbackPreferences.setPlaybackMode(selectedMode)
                         }
                     },
                 )

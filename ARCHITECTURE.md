@@ -27,6 +27,26 @@
 
 实现应保持前台 UI 与后台播放服务之间的状态边界清晰，避免把播放生命周期绑定到单个 Compose 页面。
 
+### 2.1 播放队列
+
+- 用户从歌曲页或专辑详情点播歌曲时，界面层先按当前页面已确定的排序生成完整可播放曲目列表，再一次性交给 Media3 建立队列，并以所点歌曲作为起始项。
+- 队列、当前项目、播放进度和上一首／下一首能力均以 Media3 播放器为真源；应用内迷你播放器、完整播放器、通知栏、锁屏和系统媒体入口不得各自维护另一套上下首逻辑。
+- `PlaybackMediaItemResolver` 在解析实际播放 URI 时必须保留队列和播放模式所需的 `MediaItem` 元数据，不能因替换媒体源而丢失业务标识。
+
+### 2.2 播放模式
+
+- 内部播放模式统一表达为 `Sequential`、`RepeatAll`、`RepeatOne`、`ShuffleTracks` 和 `ShuffleAlbums`。
+- 顺序播放、列表循环和单曲循环复用 Media3 的重复模式；随机歌曲和随机专辑由 Auralis 生成实际队列顺序，再交给 Media3 播放，不在 Compose 层临时计算下一首。
+- 随机歌曲采用无权重的逐轮洗牌；随机专辑以真实 `AlbumId` 为块洗牌，块内严格按 Disc Number、Track Number 排序，无专辑歌曲各自作为单曲块。
+- 随机轮次播放结束时，由 `AuralisPlaybackService` 生成下一轮顺序。重建队列时保留当前播放语义，避免 UI 与后台服务出现不同步状态。
+- 当前播放模式通过 DataStore 作为轻量偏好持久化；当前歌曲、播放位置和应用退出前的播放状态仍不持久化。
+
+### 2.3 前台播放器状态
+
+- Compose 只通过 `PlaybackControllerConnection` 观察和控制 Media3，不直接持有 ExoPlayer。
+- 迷你播放器收纳状态属于应用会话 UI 状态：跨页面和切歌保留，应用重启后恢复展开，不写入 Room 或 DataStore。
+- Liquid Glass 弹层必须位于被采样的 Backdrop 图层之外，避免弹层递归采样自身造成 RenderThread 崩溃。
+
 ## 3. 曲库目录与权限
 
 ### 目录选择
@@ -152,4 +172,3 @@ Auralis 严格解耦物理连续性与逻辑呈现：
 ### 10.4 墓碑与恢复机制（Tombstone & Reconnect）
 - 当某个逻辑曲目的所有物理源都确认缺失时，`TrackEntity` 不物理删除，作为 Tombstone 驻留。
 - 当具备相同 Strong TrackKey 的物理源重新出现时，自动重连恢复该 `TrackId`，确保播放历史与歌单引用不丢失。
-

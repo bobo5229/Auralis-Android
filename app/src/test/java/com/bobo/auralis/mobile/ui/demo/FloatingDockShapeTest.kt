@@ -27,4 +27,19 @@ class FloatingDockShapeTest {
     fun unavailableScreenCornerUsesDesignFallback() {
         assertEquals(27f, calculateDockCornerRadiusDp(screenCornerRadiusDp = null), 0f)
     }
+
+    @Test
+    fun playbackSheetUsesItsOwnConcentricInsetRadius() {
+        assertEquals(
+            36f,
+            calculateDockCornerRadiusDp(
+                screenCornerRadiusDp = 48f,
+                horizontalInsetDp = 12f,
+                minimumRadiusDp = 26f,
+                maximumRadiusDp = 46f,
+                fallbackRadiusDp = 34f,
+            ),
+            0f,
+        )
+    }
 }

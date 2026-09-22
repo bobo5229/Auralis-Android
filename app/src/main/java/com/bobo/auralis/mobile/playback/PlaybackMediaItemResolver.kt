@@ -41,6 +41,7 @@ class PlaybackMediaItemResolver(
             .setArtist(artists.takeIf { it.isNotEmpty() }?.joinToString(" ; "))
             .setAlbumTitle(albumTitle)
             .setIsPlayable(true)
+            .setExtras(request.mediaMetadata.extras)
             .build()
 
         return MediaItem.Builder()

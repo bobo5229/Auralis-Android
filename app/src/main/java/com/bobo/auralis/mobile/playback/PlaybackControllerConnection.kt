@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -26,13 +27,14 @@ data class PlaybackConnectionState(
 )
 
 /** UI-side MediaController connection; Compose never owns an ExoPlayer instance. */
-class PlaybackControllerConnection(context: Context) {
+internal class PlaybackControllerConnection(context: Context) {
     private val appContext = context.applicationContext
     private val controllerFuture = MediaController.Builder(
         appContext,
         SessionToken(appContext, ComponentName(appContext, AuralisPlaybackService::class.java)),
     ).buildAsync()
     private var controller: MediaController? = null
+    private var playbackMode: PlaybackMode = PlaybackMode.Sequential
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mutableState = MutableStateFlow(PlaybackConnectionState())
     val state: StateFlow<PlaybackConnectionState> = mutableState.asStateFlow()
@@ -59,6 +61,7 @@ class PlaybackControllerConnection(context: Context) {
                     .onSuccess {
                         controller = it
                         it.addListener(playerListener)
+                        applyNativePlaybackMode(it, playbackMode)
                         publish(it)
                         mainHandler.post(positionPublisher)
                     }
@@ -72,11 +75,40 @@ class PlaybackControllerConnection(context: Context) {
         )
     }
 
-    fun play(trackId: TrackId) {
+    fun play(trackId: TrackId, queueTracks: List<PlaybackQueueTrack>) {
         val activeController = controller ?: return
-        activeController.setMediaItem(MediaItem.Builder().setMediaId(trackId.toString()).build())
+        val queue = buildModePlaybackQueue(trackId, queueTracks, playbackMode)
+        val mediaItems = queue.tracks.map { it.toMediaItem(playbackMode) }
+        activeController.setMediaItems(mediaItems, queue.startIndex, 0L)
+        applyNativePlaybackMode(activeController, playbackMode)
         activeController.prepare()
         activeController.play()
+    }
+
+    fun restorePlaybackMode(mode: PlaybackMode) {
+        playbackMode = mode
+        controller?.let { applyNativePlaybackMode(it, mode) }
+    }
+
+    fun changePlaybackMode(mode: PlaybackMode, queueTracks: List<PlaybackQueueTrack>) {
+        playbackMode = mode
+        val activeController = controller ?: return
+        val currentTrackId = activeController.currentMediaItem?.mediaId?.toTrackId()
+        if (currentTrackId == null || activeController.mediaItemCount == 0) {
+            applyNativePlaybackMode(activeController, mode)
+            return
+        }
+        val wasPlaying = activeController.playWhenReady
+        val currentPosition = activeController.currentPosition.coerceAtLeast(0L)
+        val queue = buildModePlaybackQueue(currentTrackId, queueTracks, mode)
+        activeController.setMediaItems(
+            queue.tracks.map { it.toMediaItem(mode) },
+            queue.startIndex,
+            currentPosition,
+        )
+        applyNativePlaybackMode(activeController, mode)
+        activeController.prepare()
+        if (wasPlaying) activeController.play()
     }
 
     fun togglePlayPause() {
@@ -89,6 +121,14 @@ class PlaybackControllerConnection(context: Context) {
 
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs.coerceAtLeast(0))
+    }
+
+    fun skipToNext() {
+        controller?.seekToNextMediaItem()
+    }
+
+    fun skipToPrevious() {
+        controller?.seekToPreviousMediaItem()
     }
 
     fun release() {
@@ -114,4 +154,35 @@ class PlaybackControllerConnection(context: Context) {
     private companion object {
         const val POSITION_UPDATE_INTERVAL_MS = 500L
     }
+}
+
+internal data class PlaybackQueue(
+    val tracks: List<PlaybackQueueTrack>,
+    val startIndex: Int,
+)
+
+internal fun buildPlaybackQueue(selectedTrackId: TrackId, candidateTrackIds: List<TrackId>): PlaybackQueue {
+    return buildModePlaybackQueue(
+        selectedTrackId = selectedTrackId,
+        candidates = candidateTrackIds.map { PlaybackQueueTrack(it, null, null, null) },
+        mode = PlaybackMode.Sequential,
+    )
+}
+
+private fun PlaybackQueueTrack.toMediaItem(mode: PlaybackMode): MediaItem {
+    val extras = Bundle().apply {
+        putString(PlaybackModeMetadata.Mode, mode.key)
+        albumKey?.let { putString(PlaybackModeMetadata.AlbumKey, it) }
+        discNumber?.let { putInt(PlaybackModeMetadata.DiscNumber, it) }
+        trackNumber?.let { putInt(PlaybackModeMetadata.TrackNumber, it) }
+    }
+    return MediaItem.Builder()
+        .setMediaId(trackId.toString())
+        .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setExtras(extras).build())
+        .build()
+}
+
+private fun applyNativePlaybackMode(player: Player, mode: PlaybackMode) {
+    player.repeatMode = playbackRepeatMode(mode)
+    player.shuffleModeEnabled = false
 }

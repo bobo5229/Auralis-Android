@@ -29,6 +29,7 @@ import com.bobo.auralis.mobile.library.saf.SafLocation
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
 import com.bobo.auralis.mobile.playback.PlaybackConnectionState
 import com.bobo.auralis.mobile.playback.PlaybackControllerConnection
+import com.bobo.auralis.mobile.playback.PlaybackQueueTrack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -311,7 +312,19 @@ class SafDebugController(context: Context) {
         if (canToggleCurrent) {
             playbackConnection.togglePlayPause()
         } else {
-            playbackConnection.play(item.track.trackId)
+            playbackConnection.play(
+                trackId = item.track.trackId,
+                queueTracks = inspectedTracks
+                    .filter { it.activeSourceId != null }
+                    .map { inspected ->
+                        PlaybackQueueTrack(
+                            trackId = inspected.track.trackId,
+                            albumKey = inspected.track.albumId?.toString(),
+                            discNumber = inspected.track.discNumber,
+                            trackNumber = inspected.track.trackNumber,
+                        )
+                    },
+            )
         }
     }
 

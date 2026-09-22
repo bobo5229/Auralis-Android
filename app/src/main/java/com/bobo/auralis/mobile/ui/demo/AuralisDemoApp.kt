@@ -56,6 +56,7 @@ import com.bobo.auralis.mobile.debug.DebugActivity
 import com.bobo.auralis.mobile.R
 import com.bobo.auralis.mobile.library.browser.LibrarySnapshot
 import com.bobo.auralis.mobile.playback.PlaybackConnectionState
+import com.bobo.auralis.mobile.playback.PlaybackMode
 import com.bobo.auralis.mobile.ui.theme.AuralisThemeMode
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutAnimationStyle
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutMode
@@ -84,14 +85,19 @@ internal fun AuralisDemoApp(
     themeMode: AuralisThemeMode,
     albumLayoutMode: AlbumLayoutMode,
     albumLayoutAnimationStyle: AlbumLayoutAnimationStyle,
+    playbackMode: PlaybackMode,
     onThemeModeSelected: (AuralisThemeMode) -> Unit,
     onAlbumLayoutModeSelected: (AlbumLayoutMode) -> Unit,
     onAlbumLayoutAnimationStyleSelected: (AlbumLayoutAnimationStyle) -> Unit,
+    onPlaybackModeSelected: (PlaybackMode) -> Unit,
     viewModel: LibraryViewModel = viewModel(),
 ) {
     val context = LocalContext.current
     val library by viewModel.library.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
+    LaunchedEffect(playbackMode, playback.isConnected) {
+        if (playback.isConnected) viewModel.restorePlaybackMode(playbackMode)
+    }
     when {
         library == null -> LibraryLoadingScreen()
         library?.tracks.isNullOrEmpty() -> DemoWelcomeScreen(
@@ -102,13 +108,14 @@ internal fun AuralisDemoApp(
             playback = playback,
             onPlay = viewModel::play,
             onTogglePlayback = viewModel::togglePlayPause,
-            onNext = {
-                viewModel.playNext(requireNotNull(library).tracks.filter { it.isPlayable }.map { it.trackId })
-            },
-            onPrevious = {
-                viewModel.playPrevious(requireNotNull(library).tracks.filter { it.isPlayable }.map { it.trackId })
-            },
+            onNext = viewModel::playNext,
+            onPrevious = viewModel::playPrevious,
             onSeek = viewModel::seekTo,
+            playbackMode = playbackMode,
+            onPlaybackModeSelected = { selectedMode ->
+                viewModel.changePlaybackMode(selectedMode)
+                onPlaybackModeSelected(selectedMode)
+            },
             themeMode = themeMode,
             onThemeModeSelected = onThemeModeSelected,
             albumLayoutMode = albumLayoutMode,
@@ -129,6 +136,8 @@ private fun DemoProductShell(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onSeek: (Long) -> Unit,
+    playbackMode: PlaybackMode,
+    onPlaybackModeSelected: (PlaybackMode) -> Unit,
     themeMode: AuralisThemeMode,
     onThemeModeSelected: (AuralisThemeMode) -> Unit,
     albumLayoutMode: AlbumLayoutMode,
@@ -150,11 +159,15 @@ private fun DemoProductShell(
     var glassStyle by rememberSaveable { mutableStateOf(DemoGlassStyle.Liquid) }
     var isPlayerCollapsed by remember { mutableStateOf(false) }
     var isPlayerDragActive by remember { mutableStateOf(false) }
+    var showPlaybackModeSheet by remember { mutableStateOf(false) }
 
     val currentTrack = library.tracks.firstOrNull { it.trackId.toString() == playback.currentMediaId }
     val albumsById = library.albums.associateBy { it.albumId.toString() }
     val isMainDestination = mainDestinations.any { it.route == currentRoute }
     val isPlayer = currentRoute == "player"
+    LaunchedEffect(isPlayer) {
+        if (!isPlayer) showPlaybackModeSheet = false
+    }
     val selectedDockRoute = when {
         currentRoute.startsWith("album/") -> "library"
         currentRoute.startsWith("library/") -> "library"
@@ -293,6 +306,8 @@ private fun DemoProductShell(
                             onPrevious = onPrevious,
                             onNext = onNext,
                             onSeek = onSeek,
+                            playbackMode = playbackMode,
+                            onPlaybackModeClick = { showPlaybackModeSheet = true },
                         )
                     }
                 }
@@ -325,6 +340,18 @@ private fun DemoProductShell(
                 onExpandPlayer = { isPlayerCollapsed = false },
                 onPlayerInteractionActiveChanged = { isPlayerDragActive = it },
                 modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
+        if (isPlayer && showPlaybackModeSheet) {
+            PlaybackModeSheet(
+                selectedMode = playbackMode,
+                onDismiss = { showPlaybackModeSheet = false },
+                onModeSelected = { selectedMode ->
+                    onPlaybackModeSelected(selectedMode)
+                    showPlaybackModeSheet = false
+                },
+                backdrop = backdrop,
+                glassStyle = glassStyle,
             )
         }
     }

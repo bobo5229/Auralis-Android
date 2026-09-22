@@ -21,12 +21,14 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
+import java.security.SecureRandom
 
 class AuralisPlaybackService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
     private lateinit var mediaLibrarySession: MediaLibrarySession
     private lateinit var sourceStates: PlaybackSourceStateRepository
+    private val random = SecureRandom()
 
     override fun onCreate() {
         super.onCreate()
@@ -81,6 +83,7 @@ class AuralisPlaybackService : MediaLibraryService() {
                 val mediaId = player.currentMediaItem?.mediaId ?: return
                 serviceScope.launch(Dispatchers.IO) { sourceStates.markPlayable(mediaId) }
             }
+            if (playbackState == Player.STATE_ENDED) startNextRandomRoundIfNeeded()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -88,4 +91,34 @@ class AuralisPlaybackService : MediaLibraryService() {
             serviceScope.launch(Dispatchers.IO) { sourceStates.markUnplayable(mediaId, error) }
         }
     }
+
+    private fun startNextRandomRoundIfNeeded() {
+        val mode = PlaybackMode.fromKey(
+            player.currentMediaItem?.mediaMetadata?.extras?.getString(PlaybackModeMetadata.Mode),
+        )
+        if (!mode.usesRandomRounds || player.mediaItemCount == 0) return
+        val mediaItems = List(player.mediaItemCount, player::getMediaItemAt)
+        val tracksById = mediaItems.associateBy { it.mediaId }
+        val queueTracks = mediaItems.mapNotNull(MediaItem::toPlaybackQueueTrack)
+        val nextRound = buildNextRandomRound(queueTracks, mode, random)
+        if (nextRound.isEmpty()) return
+        player.setMediaItems(nextRound.mapNotNull { tracksById[it.trackId.toString()] })
+        player.repeatMode = Player.REPEAT_MODE_OFF
+        player.shuffleModeEnabled = false
+        player.prepare()
+        player.play()
+    }
+}
+
+private fun MediaItem.toPlaybackQueueTrack(): PlaybackQueueTrack? {
+    val resolvedTrackId = mediaId.toTrackId() ?: return null
+    val extras = mediaMetadata.extras
+    return PlaybackQueueTrack(
+        trackId = resolvedTrackId,
+        albumKey = extras?.getString(PlaybackModeMetadata.AlbumKey),
+        discNumber = extras?.takeIf { it.containsKey(PlaybackModeMetadata.DiscNumber) }
+            ?.getInt(PlaybackModeMetadata.DiscNumber),
+        trackNumber = extras?.takeIf { it.containsKey(PlaybackModeMetadata.TrackNumber) }
+            ?.getInt(PlaybackModeMetadata.TrackNumber),
+    )
 }

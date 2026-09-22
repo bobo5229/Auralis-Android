@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +63,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -176,7 +179,7 @@ internal fun DemoFloatingDock(
                             scaleX = liftedScale
                             scaleY = liftedScale
                             shadowElevation = liftProgress * 12.dp.toPx()
-                            shape = RoundedCornerShape(24.dp)
+                            shape = RoundedCornerShape(dockCornerRadius)
                             clip = false
                         }
                         .then(
@@ -251,7 +254,7 @@ internal fun DemoFloatingDock(
                                 }
                             } else Modifier
                         )
-                        .auralisGlass(backdrop, RoundedCornerShape(24.dp), glassColor, glassStyle),
+                        .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle),
                     track = track,
                     isPlaying = isPlaying,
                     onToggle = onTogglePlayback,
@@ -280,7 +283,9 @@ internal fun DemoFloatingDock(
                 selectedRoute = selectedRoute,
                 centerSlotProgress = if (currentTrack == null) 0f else transition.value,
                 onDestinationSelected = onDestinationSelected,
-                onCenterSlotClick = onExpandPlayer,
+                isPlaying = isPlaying,
+                onCenterSlotClick = onTogglePlayback,
+                onCenterSlotExpand = onExpandPlayer,
                 onBoundsChanged = { navigationBounds = it },
             )
         }
@@ -297,13 +302,17 @@ private fun DockNavigationRow(
     selectedRoute: String,
     centerSlotProgress: Float,
     onDestinationSelected: (String) -> Unit,
+    isPlaying: Boolean,
     onCenterSlotClick: () -> Unit,
+    onCenterSlotExpand: () -> Unit,
     onBoundsChanged: (Rect) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val haptics = LocalHapticFeedback.current
+    val expandThresholdPx = with(LocalDensity.current) { FloatingDockTokens.ExpandSwipeThreshold.toPx() }
+    val currentExpand by rememberUpdatedState(onCenterSlotExpand)
     Row(
         modifier = modifier.fillMaxWidth()
-            .padding(horizontal = FloatingDockTokens.NavigationExtraHorizontalInset)
             .height(FloatingDockTokens.Height)
             .onGloballyPositioned { onBoundsChanged(it.boundsInWindow()) }
             .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle).padding(4.dp),
@@ -317,7 +326,35 @@ private fun DockNavigationRow(
                         .then(
                             if (centerSlotProgress > 0.99f) {
                                 Modifier.clickable(onClick = onCenterSlotClick)
-                                    .semantics { contentDescription = "恢复迷你播放器" }
+                                    .pointerInput(expandThresholdPx) {
+                                        var drag = Offset.Zero
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                drag = Offset.Zero
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            },
+                                            onDrag = { change, amount ->
+                                                change.consume()
+                                                drag += amount
+                                            },
+                                            onDragEnd = {
+                                                if (shouldExpandCollapsedPlayer(drag.x, drag.y, expandThresholdPx)) {
+                                                    currentExpand()
+                                                }
+                                                drag = Offset.Zero
+                                            },
+                                            onDragCancel = { drag = Offset.Zero },
+                                        )
+                                    }
+                                    .semantics {
+                                        contentDescription = if (isPlaying) "暂停，长按向上滑动展开播放器" else "播放，长按向上滑动展开播放器"
+                                        customActions = listOf(
+                                            CustomAccessibilityAction("展开播放器") {
+                                                currentExpand()
+                                                true
+                                            },
+                                        )
+                                    }
                             } else Modifier
                         ),
                 )
@@ -436,8 +473,7 @@ private object FloatingDockTokens {
     val StackHeight = PlayerHeight + StackGap + Height
     val ItemHeight = 48.dp
     val ItemCornerRadius = 20.dp
-    val HorizontalInset = 12.dp
-    val NavigationExtraHorizontalInset = 20.dp
+    val HorizontalInset = 32.dp
     val IconSize = 32.dp
     val PlayerHorizontalPadding = 9.dp
     val ExpandedArtworkSize = 48.dp
@@ -446,6 +482,7 @@ private object FloatingDockTokens {
     val ProgressTrackStroke = 2.dp
     val MaximumDownDampedDragOffset = 6.dp
     val MaximumUpDampedDragOffset = 2.5.dp
+    val ExpandSwipeThreshold = 24.dp
     val VerticalInset = 10.dp
     val MinimumCornerRadius = 20.dp
     val MaximumCornerRadius = Height / 2
@@ -453,6 +490,9 @@ private object FloatingDockTokens {
     const val TransitionDurationMs = 280
     const val WavePointCount = 192
 }
+
+internal fun shouldExpandCollapsedPlayer(deltaX: Float, deltaY: Float, thresholdPx: Float): Boolean =
+    deltaY <= -thresholdPx && -deltaY > abs(deltaX)
 
 internal fun dampedDragOffsetPx(
     dragDistancePx: Float,
@@ -635,7 +675,20 @@ internal fun navigationSlotCenters(slotCount: Int, width: Float): List<Float> {
 }
 
 @Composable
-private fun rememberAdaptiveDockCornerRadius() = with(LocalDensity.current) {
+private fun rememberAdaptiveDockCornerRadius() = rememberAdaptiveScreenCornerRadius(
+    horizontalInset = FloatingDockTokens.HorizontalInset,
+    minimumRadius = FloatingDockTokens.MinimumCornerRadius,
+    maximumRadius = FloatingDockTokens.MaximumCornerRadius,
+    fallbackRadius = FloatingDockTokens.FallbackCornerRadius,
+)
+
+@Composable
+internal fun rememberAdaptiveScreenCornerRadius(
+    horizontalInset: androidx.compose.ui.unit.Dp,
+    minimumRadius: androidx.compose.ui.unit.Dp,
+    maximumRadius: androidx.compose.ui.unit.Dp,
+    fallbackRadius: androidx.compose.ui.unit.Dp,
+) = with(LocalDensity.current) {
     val view = LocalView.current
     val configuration = LocalConfiguration.current
     var screenCornerRadiusPx by remember(view) { mutableStateOf<Int?>(null) }
@@ -663,12 +716,10 @@ private fun rememberAdaptiveDockCornerRadius() = with(LocalDensity.current) {
 
     calculateDockCornerRadiusDp(
         screenCornerRadiusDp = screenCornerRadiusPx?.toDp()?.value,
-        horizontalInsetDp = (
-            FloatingDockTokens.HorizontalInset + FloatingDockTokens.NavigationExtraHorizontalInset
-        ).value,
-        minimumRadiusDp = FloatingDockTokens.MinimumCornerRadius.value,
-        maximumRadiusDp = FloatingDockTokens.MaximumCornerRadius.value,
-        fallbackRadiusDp = FloatingDockTokens.FallbackCornerRadius.value,
+        horizontalInsetDp = horizontalInset.value,
+        minimumRadiusDp = minimumRadius.value,
+        maximumRadiusDp = maximumRadius.value,
+        fallbackRadiusDp = fallbackRadius.value,
     ).dp
 }
 
@@ -750,7 +801,7 @@ private fun GlassMiniPlayer(
     }
 }
 
-private fun Modifier.auralisGlass(
+internal fun Modifier.auralisGlass(
     backdrop: Backdrop,
     shape: Shape,
     surfaceColor: Color,
