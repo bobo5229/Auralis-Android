@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -148,6 +149,10 @@ private fun DemoProductShell(
     val navController = rememberNavController()
     val albumsGridState = rememberLazyGridState()
     val tracksListState = rememberLazyListState()
+    val genresListState = rememberLazyListState()
+    val showGenresTitleInTopBar by remember {
+        derivedStateOf { shouldShowPinnedLibraryContentTitle(genresListState.firstVisibleItemIndex) }
+    }
     val showAlbumsTitleInTopBar by remember {
         derivedStateOf { shouldShowPinnedLibraryContentTitle(albumsGridState.firstVisibleItemIndex) }
     }
@@ -156,6 +161,12 @@ private fun DemoProductShell(
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: "home"
+    val genreId = backStackEntry?.arguments?.getString("genreId")
+    val currentGenre = library.genres.firstOrNull { it.genreId.toString() == genreId }
+    val genreTracksListState = rememberSaveable(genreId, saver = LazyListState.Saver) { LazyListState() }
+    val showGenreTracksTitleInTopBar by remember(genreTracksListState) {
+        derivedStateOf { shouldShowPinnedLibraryContentTitle(genreTracksListState.firstVisibleItemIndex) }
+    }
     var glassStyle by rememberSaveable { mutableStateOf(DemoGlassStyle.Liquid) }
     var isPlayerCollapsed by remember { mutableStateOf(false) }
     var isPlayerDragActive by remember { mutableStateOf(false) }
@@ -216,12 +227,19 @@ private fun DemoProductShell(
                                 visible = when (currentRoute) {
                                     "library/albums" -> showAlbumsTitleInTopBar
                                     "library/tracks" -> showTracksTitleInTopBar
+                                    "library/genres" -> showGenresTitleInTopBar
+                                    "library/genres/{genreId}" -> showGenreTracksTitleInTopBar
                                     else -> false
                                 },
                                 enter = fadeIn(),
                                 exit = fadeOut(),
                             ) {
-                                Text(if (currentRoute == "library/tracks") "歌曲" else "专辑")
+                                Text(when (currentRoute) {
+                                    "library/tracks" -> "歌曲"
+                                    "library/genres" -> "流派"
+                                    "library/genres/{genreId}" -> currentGenre?.displayName ?: "流派"
+                                    else -> "专辑"
+                                })
                             }
                         },
                         navigationIcon = {
@@ -255,6 +273,7 @@ private fun DemoProductShell(
                         onAlbumsClick = { navController.navigate("library/albums") },
                         onTracksClick = { navController.navigate("library/tracks") },
                         onPlaylistsClick = { navController.navigate("library/playlists") },
+                        onGenresClick = { navController.navigate("library/genres") },
                     )
                 }
                 composable("library/albums") {
@@ -279,6 +298,27 @@ private fun DemoProductShell(
                     )
                 }
                 composable("library/playlists") { DemoPlaylistsScreen(contentBottomPadding) }
+                composable("library/genres") {
+                    DemoGenresScreen(library.genres, contentBottomPadding, genresListState) {
+                        navController.navigate("library/genres/${it.genreId}")
+                    }
+                }
+                composable("library/genres/{genreId}") { entry ->
+                    val genre = library.genres.firstOrNull { it.genreId.toString() == entry.arguments?.getString("genreId") }
+                    if (genre == null) {
+                        DemoPlaceholderScreen("该流派暂无歌曲", contentBottomPadding)
+                    } else {
+                        DemoTracksScreen(
+                            tracks = genre.tracks,
+                            albumsById = albumsById,
+                            bottomPadding = contentBottomPadding,
+                            listState = genreTracksListState,
+                            currentTrackId = playback.currentMediaId,
+                            onTrackClick = { onPlay(it.trackId) },
+                            title = genre.displayName,
+                        )
+                    }
+                }
                 composable("roam") { DemoPlaceholderScreen("漫游", contentBottomPadding) }
                 composable("search") { DemoPlaceholderScreen("搜索", contentBottomPadding) }
                 composable("album/{albumId}") { entry ->

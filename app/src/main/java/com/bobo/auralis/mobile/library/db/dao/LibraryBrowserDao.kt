@@ -2,6 +2,7 @@ package com.bobo.auralis.mobile.library.db.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import com.bobo.auralis.mobile.library.model.GenreId
 import com.bobo.auralis.mobile.library.db.entity.AlbumEntity
 import com.bobo.auralis.mobile.library.db.entity.TrackEntity
 import com.bobo.auralis.mobile.library.model.AlbumId
@@ -12,6 +13,8 @@ import com.bobo.auralis.mobile.library.model.SourceAvailabilityState
 import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.TrackSourceId
 import kotlinx.coroutines.flow.Flow
+
+data class TrackGenreNameRow(val genreId: GenreId, val displayName: String, val trackId: TrackId)
 
 data class AlbumArtistNameRow(
     val albumId: AlbumId,
@@ -47,6 +50,14 @@ data class ActiveTrackSourceRow(
 /** Read-only reactive projections for product library pages. */
 @Dao
 interface LibraryBrowserDao {
+    @Query(
+        """
+        SELECT genre.genreId, genre.displayName, track_genre.trackId FROM genre
+        INNER JOIN track_genre ON track_genre.genreId = genre.genreId
+        """,
+    )
+    fun observeGenres(): Flow<List<TrackGenreNameRow>>
+
     @Query("SELECT * FROM album ORDER BY title COLLATE NOCASE ASC, date ASC, albumId ASC")
     fun observeAlbums(): Flow<List<AlbumEntity>>
 

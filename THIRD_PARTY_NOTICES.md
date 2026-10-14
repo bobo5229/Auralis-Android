@@ -1,5 +1,12 @@
 # 第三方代码来源与许可
 
+## OpenCC 搜索字符表
+
+- 上游：https://github.com/BYVoid/OpenCC
+- 固定 commit：`b087c2612ce808f464b0925fc1c497d24971d179`
+- 原样收录 `data/dictionary/TSCharacters.txt` 至 `app/src/main/resources/opencc/`，同目录保留 Apache-2.0 许可证。
+- 仅用于歌曲搜索的简繁字符归一化，每字取首个简体候选；不包含转换引擎或地区词汇转换，不修改元数据、显示内容或身份键。
+
 ## Auxio / Musikr
 
 - 上游仓库：<https://github.com/OxygenCobalt/Auxio>

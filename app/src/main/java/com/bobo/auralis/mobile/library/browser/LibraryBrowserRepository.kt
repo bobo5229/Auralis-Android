@@ -4,6 +4,7 @@ import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import com.bobo.auralis.mobile.library.db.dao.ActiveTrackSourceRow
 import com.bobo.auralis.mobile.library.db.dao.AlbumArtistNameRow
 import com.bobo.auralis.mobile.library.db.dao.TrackArtistNameRow
+import com.bobo.auralis.mobile.library.db.dao.TrackGenreNameRow
 import com.bobo.auralis.mobile.library.db.entity.AlbumEntity
 import com.bobo.auralis.mobile.library.db.entity.TrackEntity
 import com.bobo.auralis.mobile.library.model.AlbumId
@@ -16,7 +17,7 @@ import kotlinx.coroutines.flow.combine
 class LibraryBrowserRepository(database: AuralisDatabase) {
     private val dao = database.libraryBrowserDao()
 
-    val snapshot: Flow<LibrarySnapshot> = combine(
+    private val tracksSnapshot: Flow<LibrarySnapshot> = combine(
         dao.observeAlbums(),
         dao.observeTracks(),
         dao.observeAlbumArtists(),
@@ -25,6 +26,30 @@ class LibraryBrowserRepository(database: AuralisDatabase) {
     ) { albums, tracks, albumArtistRows, trackArtistRows, activeRows ->
         projectLibrarySnapshot(albums, tracks, albumArtistRows, trackArtistRows, activeRows)
     }
+
+    val snapshot: Flow<LibrarySnapshot> = combine(tracksSnapshot, dao.observeGenres()) { library, genres ->
+        library.copy(genres = projectLibraryGenres(library.tracks, genres))
+    }
+}
+
+internal fun sortLibraryGenres(genres: List<LibraryGenre>): List<LibraryGenre> =
+    genres.sortedWith(compareBy<LibraryGenre> { pinyinAlphabeticalSortKey(it.displayName) }
+        .thenBy { it.displayName }.thenBy { it.genreId.toString() })
+
+internal fun projectLibraryGenres(
+    tracks: List<LibraryTrack>,
+    rows: List<TrackGenreNameRow>,
+): List<LibraryGenre> {
+    val genresByTrack = rows.groupBy { it.trackId }
+    val tracksByGenre = mutableMapOf<com.bobo.auralis.mobile.library.model.GenreId, MutableList<LibraryTrack>>()
+    tracks.forEach { track ->
+        genresByTrack[track.trackId].orEmpty().map { it.genreId }.distinct().forEach { genreId ->
+            tracksByGenre.getOrPut(genreId) { mutableListOf() }.add(track)
+        }
+    }
+    return sortLibraryGenres(rows.distinctBy { it.genreId }.mapNotNull { row ->
+        tracksByGenre[row.genreId]?.let { LibraryGenre(row.genreId, row.displayName, it) }
+    })
 }
 
 internal fun projectLibrarySnapshot(

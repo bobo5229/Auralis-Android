@@ -1,6 +1,7 @@
 package com.bobo.auralis.mobile.library.browser
 
 import com.bobo.auralis.mobile.library.model.AlbumId
+import com.bobo.auralis.mobile.library.model.GenreId
 import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.TrackSourceId
 
@@ -48,9 +49,16 @@ data class LibraryAlbum(
         get() = albumArtists.takeIf { it.isNotEmpty() }?.joinToString("；") ?: "未知 Album Artist"
 }
 
+data class LibraryGenre(
+    val genreId: GenreId,
+    val displayName: String,
+    val tracks: List<LibraryTrack> = emptyList(),
+)
+
 data class LibrarySnapshot(
     val albums: List<LibraryAlbum> = emptyList(),
     val tracks: List<LibraryTrack> = emptyList(),
+    val genres: List<LibraryGenre> = emptyList(),
 ) {
     val tracksById: Map<TrackId, LibraryTrack>
         get() = tracks.associateBy { it.trackId }

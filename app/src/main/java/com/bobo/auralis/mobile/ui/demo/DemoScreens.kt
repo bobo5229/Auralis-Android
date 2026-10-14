@@ -52,6 +52,16 @@ import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Check
@@ -97,6 +107,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.bobo.auralis.mobile.library.browser.LibraryAlbum
 import com.bobo.auralis.mobile.library.browser.LibraryTrack
+import com.bobo.auralis.mobile.library.browser.LibraryGenre
 import com.bobo.auralis.mobile.playback.PlaybackMode
 import com.bobo.auralis.mobile.ui.theme.AuralisThemeTokens
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutAnimationStyle
@@ -131,16 +142,19 @@ fun DemoLibraryScreen(
     onAlbumsClick: () -> Unit,
     onTracksClick: () -> Unit,
     onPlaylistsClick: () -> Unit,
+    onGenresClick: () -> Unit,
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(start = 18.dp, end = 18.dp, bottom = bottomPadding),
     ) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
-        LibraryCategoryRow("专辑", Icons.Rounded.Album, onAlbumsClick)
+        LibraryCategoryRow("专辑", Icons.Rounded.LibraryMusic, onAlbumsClick)
         LibraryCategoryDivider()
-        LibraryCategoryRow("歌曲", Icons.Rounded.LibraryMusic, onTracksClick)
+        LibraryCategoryRow("歌曲", Icons.Rounded.MusicNote, onTracksClick)
         LibraryCategoryDivider()
         LibraryCategoryRow("歌单", Icons.AutoMirrored.Rounded.QueueMusic, onPlaylistsClick)
+        LibraryCategoryDivider()
+        LibraryCategoryRow("流派", Icons.Rounded.Category, onGenresClick)
     }
 }
 
@@ -538,7 +552,13 @@ fun DemoTracksScreen(
     listState: LazyListState,
     currentTrackId: String?,
     onTrackClick: (LibraryTrack) -> Unit,
+    title: String = "歌曲",
 ) {
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    val visibleTracks = remember(tracks, albumsById, searchQuery) {
+        filterSongTracks(tracks, albumsById, searchQuery)
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -546,13 +566,42 @@ fun DemoTracksScreen(
     ) {
         item(key = "tracks-title") {
             Text(
-                text = "歌曲",
+                text = title,
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(start = 18.dp, top = 8.dp, end = 18.dp, bottom = 2.dp),
             )
         }
-        itemsIndexed(tracks, key = { _, track -> track.trackId.toString() }) { index, track ->
+        item(key = "tracks-search") {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+                placeholder = { Text("搜索歌曲、艺术家、专辑") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "清除搜索")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+            )
+        }
+        if (visibleTracks.isEmpty()) {
+            item(key = "tracks-empty") {
+                Text(
+                    text = if (searchQuery.isBlank()) "暂无歌曲" else "未找到匹配的歌曲",
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 24.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        itemsIndexed(visibleTracks, key = { _, track -> track.trackId.toString() }) { index, track ->
             val album = track.albumId?.toString()?.let(albumsById::get)
             val rowColor = if (index % 2 == 0) {
                 MaterialTheme.colorScheme.surfaceContainerLow
@@ -591,6 +640,49 @@ fun DemoTracksScreen(
                     )
                 }
                 Text(formatDuration(track.durationMs), style = MaterialTheme.typography.bodyMedium, color = AuralisThemeTokens.colors.contentTertiary)
+            }
+        }
+    }
+}
+
+@Composable
+fun DemoGenresScreen(
+    genres: List<LibraryGenre>,
+    bottomPadding: Dp,
+    listState: LazyListState,
+    onGenreClick: (LibraryGenre) -> Unit,
+) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = bottomPadding),
+    ) {
+        item(key = "genres-title") {
+            Text(
+                text = "流派",
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 18.dp, top = 8.dp, end = 18.dp, bottom = 12.dp),
+            )
+        }
+        if (genres.isEmpty()) {
+            item(key = "genres-empty") {
+                Text("暂无流派", modifier = Modifier.padding(18.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        itemsIndexed(genres, key = { _, genre -> genre.genreId.toString() }) { index, genre ->
+            Text(
+                genre.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.fillMaxWidth().clickable { onGenreClick(genre) }
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+            )
+            if (index < genres.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 18.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.62f),
+                    thickness = 0.5.dp,
+                )
             }
         }
     }
@@ -689,6 +781,7 @@ internal fun DemoPlayerScreen(
     playbackMode: PlaybackMode,
     onPlaybackModeClick: () -> Unit,
 ) {
+    var showLyrics by rememberSaveable { mutableStateOf(false) }
     val effectiveDuration = durationMs?.takeIf { it > 0 } ?: 0L
     val progress = if (effectiveDuration > 0) {
         (positionMs.toFloat() / effectiveDuration.toFloat()).coerceIn(0f, 1f)
@@ -705,10 +798,18 @@ internal fun DemoPlayerScreen(
             Spacer(Modifier.weight(1f))
             Text("正在播放", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = {}) { Icon(Icons.Rounded.Lyrics, contentDescription = "歌词") }
+            IconButton(onClick = { showLyrics = !showLyrics }) {
+                Icon(if (showLyrics) Icons.Rounded.Album else Icons.Rounded.Lyrics, contentDescription = if (showLyrics) "显示封面" else "显示歌词")
+            }
         }
         Spacer(Modifier.height(20.dp))
-        LibraryArtwork(track.artworkSource, album?.albumId?.toString() ?: track.trackId.toString(), Modifier.fillMaxWidth().aspectRatio(1f), cornerRadius = 26)
+        if (showLyrics) {
+            PlayerLyrics(track.artworkSource, positionMs, Modifier.fillMaxWidth().weight(1f))
+        } else {
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                LibraryArtwork(track.artworkSource, album?.albumId?.toString() ?: track.trackId.toString(), Modifier.size(minOf(maxWidth, maxHeight)), cornerRadius = 26)
+            }
+        }
         Spacer(Modifier.height(28.dp))
         Column(Modifier.fillMaxWidth()) {
             Text(track.title, style = MaterialTheme.typography.headlineMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -762,10 +863,10 @@ internal fun DemoPlayerScreen(
             Spacer(Modifier.size(48.dp))
         }
         Spacer(Modifier.height(12.dp))
-        TextButton(onClick = {}) {
+        TextButton(onClick = { showLyrics = !showLyrics }) {
             Icon(Icons.Rounded.Lyrics, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("查看歌词")
+            Text(if (showLyrics) "查看封面" else "查看歌词")
         }
         }
     }
