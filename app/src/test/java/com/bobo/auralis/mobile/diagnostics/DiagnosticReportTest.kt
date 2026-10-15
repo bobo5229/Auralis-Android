@@ -72,8 +72,11 @@ class DiagnosticReportTest {
                 scanId = 7L,
                 startedAt = 0L,
                 elapsedMs = 12L,
-                totalFilesDiscovered = 1,
-                audioCandidatesDiscovered = 1,
+                totalFilesDiscovered = 2,
+                audioCandidatesDiscovered = 2,
+                uniqueAudioCandidatesDiscovered = 1,
+                cacheMisses = 2,
+                extractionFailures = 1,
                 parsedSuccessfully = 1,
                 parseFailed = 0,
                 rootsAttempted = 1,
@@ -95,6 +98,11 @@ class DiagnosticReportTest {
         val json = DiagnosticReportFormatter.toJson(report)
 
         assertTrue(text.contains("Directory access issues (1)"))
+        assertTrue(text.contains("files/audio aliases/unique audio: 2/2/1"))
+        assertTrue(text.contains("unique parsed/failed sources: 1/0"))
+        assertTrue(text.contains("cache hydrations/extraction attempts/failures: 0/2/1"))
+        assertTrue(json.contains("\"uniqueAudioCandidatesDiscovered\": 1"))
+        assertTrue(json.contains("\"extractionFailures\": 1"))
         assertTrue(text.contains("ERROR_CODE_IO_FILE_NOT_FOUND"))
         assertTrue(json.contains("\"directoryIssues\""))
         assertTrue(json.contains("a\\\"b.mp3"))

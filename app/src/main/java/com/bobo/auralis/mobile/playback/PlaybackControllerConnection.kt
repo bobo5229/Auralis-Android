@@ -15,6 +15,12 @@ import com.bobo.auralis.mobile.library.model.TrackId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 data class PlaybackConnectionState(
     val isConnected: Boolean = false,
@@ -34,7 +40,8 @@ internal class PlaybackControllerConnection(context: Context) {
         SessionToken(appContext, ComponentName(appContext, AuralisPlaybackService::class.java)),
     ).buildAsync()
     private var controller: MediaController? = null
-    private var playbackMode: PlaybackMode = PlaybackMode.Sequential
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val preferences = PlaybackPreferencesRepository(appContext)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val mutableState = MutableStateFlow(PlaybackConnectionState())
     val state: StateFlow<PlaybackConnectionState> = mutableState.asStateFlow()
@@ -61,7 +68,6 @@ internal class PlaybackControllerConnection(context: Context) {
                     .onSuccess {
                         controller = it
                         it.addListener(playerListener)
-                        applyNativePlaybackMode(it, playbackMode)
                         publish(it)
                         mainHandler.post(positionPublisher)
                     }
@@ -77,36 +83,34 @@ internal class PlaybackControllerConnection(context: Context) {
 
     fun play(trackId: TrackId, queueTracks: List<PlaybackQueueTrack>) {
         val activeController = controller ?: return
-        val queue = buildModePlaybackQueue(trackId, queueTracks, playbackMode)
-        val mediaItems = queue.tracks.map { it.toMediaItem(playbackMode) }
-        activeController.setMediaItems(mediaItems, queue.startIndex, 0L)
-        applyNativePlaybackMode(activeController, playbackMode)
-        activeController.prepare()
-        activeController.play()
+        scope.launch {
+            val modeKey = activeController.currentMediaItem?.mediaMetadata?.extras?.getString(PlaybackModeMetadata.Mode)
+            val mode = if (modeKey != null) PlaybackMode.fromKey(modeKey) else preferences.playbackMode.first()
+            val candidates = queueTracks.mapIndexed { index, track -> track.copy(queueIndex = index) }
+            val queue = buildModePlaybackQueue(trackId, candidates, mode)
+            activeController.setMediaItems(queue.tracks.map { it.toMediaItem(mode) }, queue.startIndex, 0L)
+            activeController.prepare()
+            activeController.play()
+        }
     }
 
-    fun restorePlaybackMode(mode: PlaybackMode) {
-        playbackMode = mode
-        controller?.let { applyNativePlaybackMode(it, mode) }
-    }
-
-    fun changePlaybackMode(mode: PlaybackMode, queueTracks: List<PlaybackQueueTrack>) {
-        playbackMode = mode
+    fun changePlaybackMode(mode: PlaybackMode) {
         val activeController = controller ?: return
         val currentTrackId = activeController.currentMediaItem?.mediaId?.toTrackId()
         if (currentTrackId == null || activeController.mediaItemCount == 0) {
-            applyNativePlaybackMode(activeController, mode)
             return
         }
         val wasPlaying = activeController.playWhenReady
         val currentPosition = activeController.currentPosition.coerceAtLeast(0L)
-        val queue = buildModePlaybackQueue(currentTrackId, queueTracks, mode)
+        val candidates = restoreQueueOrder(List(activeController.mediaItemCount) { index ->
+            activeController.getMediaItemAt(index)
+        }.mapNotNull { it.toPlaybackQueueTrack() })
+        val queue = buildModePlaybackQueue(currentTrackId, candidates, mode)
         activeController.setMediaItems(
             queue.tracks.map { it.toMediaItem(mode) },
             queue.startIndex,
             currentPosition,
         )
-        applyNativePlaybackMode(activeController, mode)
         activeController.prepare()
         if (wasPlaying) activeController.play()
     }
@@ -132,6 +136,7 @@ internal class PlaybackControllerConnection(context: Context) {
     }
 
     fun release() {
+        scope.cancel()
         mainHandler.removeCallbacks(positionPublisher)
         controller?.removeListener(playerListener)
         MediaController.releaseFuture(controllerFuture)
@@ -175,14 +180,10 @@ private fun PlaybackQueueTrack.toMediaItem(mode: PlaybackMode): MediaItem {
         albumKey?.let { putString(PlaybackModeMetadata.AlbumKey, it) }
         discNumber?.let { putInt(PlaybackModeMetadata.DiscNumber, it) }
         trackNumber?.let { putInt(PlaybackModeMetadata.TrackNumber, it) }
+        queueIndex?.let { putInt(PlaybackModeMetadata.QueueIndex, it) }
     }
     return MediaItem.Builder()
         .setMediaId(trackId.toString())
         .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setExtras(extras).build())
         .build()
-}
-
-private fun applyNativePlaybackMode(player: Player, mode: PlaybackMode) {
-    player.repeatMode = playbackRepeatMode(mode)
-    player.shuffleModeEnabled = false
 }

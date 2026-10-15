@@ -21,6 +21,8 @@
 
 ## 40. Active metadata 更新策略
 
+> 2026-10-15 实施勘误：仅当 winner 和它的 SourceMetadata 都未变化时才跳过 logical metadata 重建。同一 Active Source 的标签变化也必须在事务内重新投影；批处理中应立即刷新其 TrackKey，供同批后续匹配使用。
+
 每当以下任一事件发生：
 
 ```text

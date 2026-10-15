@@ -14,7 +14,7 @@ import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.TrackSourceId
 import kotlinx.coroutines.flow.Flow
 
-data class TrackGenreNameRow(val genreId: GenreId, val displayName: String, val trackId: TrackId)
+data class TrackGenreNameRow(val genreId: GenreId, val displayName: String, val trackId: TrackId, val position: Int = 0)
 
 data class AlbumArtistNameRow(
     val albumId: AlbumId,
@@ -52,8 +52,9 @@ data class ActiveTrackSourceRow(
 interface LibraryBrowserDao {
     @Query(
         """
-        SELECT genre.genreId, genre.displayName, track_genre.trackId FROM genre
+        SELECT genre.genreId, genre.displayName, track_genre.trackId, track_genre.position FROM genre
         INNER JOIN track_genre ON track_genre.genreId = genre.genreId
+        ORDER BY track_genre.trackId, track_genre.position
         """,
     )
     fun observeGenres(): Flow<List<TrackGenreNameRow>>

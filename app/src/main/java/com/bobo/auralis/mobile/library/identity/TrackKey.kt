@@ -66,24 +66,16 @@ object TrackKeyV1 {
     )
 
     /**
-     * Strength rule from §10:
-     *
-     * ```text
-     * album != null
-     * AND countPresent(title != null, artists.isNotEmpty(), trackNumber != null) >= 2
-     * ```
-     *
-     * Disc number contributes nothing by itself; it only differentiates further.
+     * METADATA.md §8.3: every track identity dimension must be present before
+     * different physical sources may be merged. Unknown album artist/date remain
+     * legitimate album-key components under §8.2; an album title is required.
      */
     fun strengthOf(identity: TrackIdentity): TrackKeyStrength {
-        if (identity.albumIdentity == null) return TrackKeyStrength.WEAK
-        val present = countPresent(
-            identity.title != null,
-            identity.trackArtists.isNotEmpty(),
-            identity.trackNumber != null,
-        )
-        return if (present >= 2) TrackKeyStrength.STRONG else TrackKeyStrength.WEAK
+        val complete = IdentityTextNormalizerV1.normalize(identity.albumIdentity?.albumTitle) != null &&
+            IdentityTextNormalizerV1.normalize(identity.title) != null &&
+            identity.trackArtists.any { IdentityTextNormalizerV1.normalize(it) != null } &&
+            identity.discNumber?.let { it > 0 } == true &&
+            identity.trackNumber?.let { it > 0 } == true
+        return if (complete) TrackKeyStrength.STRONG else TrackKeyStrength.WEAK
     }
-
-    private fun countPresent(vararg evidence: Boolean): Int = evidence.count { it }
 }

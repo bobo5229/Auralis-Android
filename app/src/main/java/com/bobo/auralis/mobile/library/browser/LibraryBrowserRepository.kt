@@ -28,8 +28,23 @@ class LibraryBrowserRepository(database: AuralisDatabase) {
     }
 
     val snapshot: Flow<LibrarySnapshot> = combine(tracksSnapshot, dao.observeGenres()) { library, genres ->
-        library.copy(genres = projectLibraryGenres(library.tracks, genres))
+        projectGenreSnapshot(library, genres)
     }
+}
+
+internal fun projectGenreSnapshot(library: LibrarySnapshot, rows: List<TrackGenreNameRow>): LibrarySnapshot {
+    val byTrack = rows.groupBy { it.trackId }
+    val tracks = library.tracks.map { track ->
+        track.copy(genres = byTrack[track.trackId].orEmpty().sortedBy { it.position }.map { it.displayName })
+    }
+    val tracksById = tracks.associateBy { it.trackId }
+    return library.copy(
+        tracks = tracks,
+        albums = library.albums.map { album ->
+            album.copy(tracks = album.tracks.mapNotNull { tracksById[it.trackId] })
+        },
+        genres = projectLibraryGenres(tracks, rows),
+    )
 }
 
 internal fun sortLibraryGenres(genres: List<LibraryGenre>): List<LibraryGenre> =

@@ -170,8 +170,16 @@ object ReconciliationDecisionEngine {
      * @param wasRootReachable Whether the root/scope of this source was successfully and reachable-scanned.
      *   If the root was UNAVAILABLE or had an access failure, source must be UNREACHABLE, never MISSING (§22).
      */
-    fun decideMissingState(wasRootReachable: Boolean): SourceAvailabilityState {
-        return if (wasRootReachable) {
+    fun decideMissingState(
+        wasRootReachable: Boolean,
+        sourcePath: String = "",
+        unavailableScopes: List<String> = emptyList(),
+    ): SourceAvailabilityState {
+        val inFailedScope = unavailableScopes.any { scope ->
+            val directory = scope.trimEnd('/')
+            sourcePath == directory || sourcePath.startsWith("$directory/")
+        }
+        return if (wasRootReachable && !inFailedScope) {
             SourceAvailabilityState.MISSING
         } else {
             SourceAvailabilityState.UNREACHABLE

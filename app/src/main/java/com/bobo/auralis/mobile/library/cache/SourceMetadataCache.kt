@@ -6,7 +6,9 @@ import com.bobo.auralis.mobile.library.identity.AlbumIdentity
 import com.bobo.auralis.mobile.library.identity.AlbumKey
 import com.bobo.auralis.mobile.library.identity.TrackIdentity
 import com.bobo.auralis.mobile.library.identity.TrackKey
+import com.bobo.auralis.mobile.library.identity.TrackKeyV1
 import com.bobo.auralis.mobile.library.metadata.AuralisMetadata
+import com.bobo.auralis.mobile.library.metadata.parseAuralisDate
 import com.bobo.auralis.mobile.library.model.ObservedTrackSource
 import com.bobo.auralis.mobile.library.model.ParseState
 import com.bobo.auralis.mobile.library.model.ResolvedObservation
@@ -69,6 +71,14 @@ object SourceMetadataCache {
 
         // Must have parsed successfully previously to be eligible for HIT
         if (existingSource.parseState != ParseState.PARSED) {
+            return CacheClassification.Stale(existingSource)
+        }
+        // Old parser versions accepted impossible dates; re-extract those snapshots
+        // so corrected release identity reaches reconciliation on a manual rescan.
+        if (cachedMetadata.date?.let { parseAuralisDate(it) != it } == true ||
+            cachedMetadata.trackNumber?.let { it <= 0 } == true ||
+            cachedMetadata.discNumber?.let { it <= 0 } == true
+        ) {
             return CacheClassification.Stale(existingSource)
         }
 
@@ -192,7 +202,7 @@ object SourceMetadataCache {
 
         val trackIdentity = TrackIdentity(
             albumIdentity = albumIdentity,
-            title = meta.title ?: fileName,
+            title = meta.title,
             trackArtists = meta.artists,
             discNumber = meta.discNumber,
             trackNumber = meta.trackNumber,
@@ -209,7 +219,8 @@ object SourceMetadataCache {
             albumKey = albumKey,
             trackIdentity = trackIdentity,
             trackKey = trackKey,
-            trackKeyStrength = meta.trackKeyStrength,
+            // Re-evaluate old cache entries against the current completeness rule.
+            trackKeyStrength = TrackKeyV1.strengthOf(trackIdentity),
         )
     }
 }

@@ -5,6 +5,7 @@
  */
 package com.bobo.auralis.mobile.playback
 
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -20,21 +21,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.guava.future
-import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
 class AuralisPlaybackService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
     private lateinit var mediaLibrarySession: MediaLibrarySession
-    private lateinit var sourceStates: PlaybackSourceStateRepository
+    private data class EvidenceEvent(val evidence: PlaybackSourceEvidence, val error: PlaybackException? = null)
+    private lateinit var evidenceWriter: PlaybackEvidenceWriter<EvidenceEvent>
     private val random = SecureRandom()
 
     override fun onCreate() {
         super.onCreate()
         val database = AuralisDatabase.get(this)
         val resolver = PlaybackMediaItemResolver(database)
-        sourceStates = PlaybackSourceStateRepository(database)
+        val sourceStates = PlaybackSourceStateRepository(database)
+        evidenceWriter = PlaybackEvidenceWriter(
+            scope = serviceScope,
+            write = { (evidence, error) ->
+                if (error == null) sourceStates.markPlayable(evidence)
+                else sourceStates.markUnplayable(evidence, error)
+            },
+            onFailure = { Log.e("PlaybackEvidence", "Unable to persist playback evidence", it) },
+        )
 
         player = ExoPlayer.Builder(this)
             .setAudioAttributes(
@@ -78,17 +87,24 @@ class AuralisPlaybackService : MediaLibraryService() {
     }
 
     private inner class PlaybackEvidenceListener : Player.Listener {
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED) || events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                val mode = PlaybackMode.fromKey(player.currentMediaItem?.mediaMetadata?.extras?.getString(PlaybackModeMetadata.Mode))
+                player.repeatMode = playbackRepeatMode(mode)
+                player.shuffleModeEnabled = false
+            }
+        }
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_READY) {
-                val mediaId = player.currentMediaItem?.mediaId ?: return
-                serviceScope.launch(Dispatchers.IO) { sourceStates.markPlayable(mediaId) }
+                val evidence = player.currentMediaItem?.sourceEvidence() ?: return
+                evidenceWriter.record(EvidenceEvent(evidence))
             }
             if (playbackState == Player.STATE_ENDED) startNextRandomRoundIfNeeded()
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            val mediaId = player.currentMediaItem?.mediaId ?: return
-            serviceScope.launch(Dispatchers.IO) { sourceStates.markUnplayable(mediaId, error) }
+            val evidence = player.currentMediaItem?.sourceEvidence() ?: return
+            evidenceWriter.record(EvidenceEvent(evidence, error))
         }
     }
 
@@ -108,17 +124,4 @@ class AuralisPlaybackService : MediaLibraryService() {
         player.prepare()
         player.play()
     }
-}
-
-private fun MediaItem.toPlaybackQueueTrack(): PlaybackQueueTrack? {
-    val resolvedTrackId = mediaId.toTrackId() ?: return null
-    val extras = mediaMetadata.extras
-    return PlaybackQueueTrack(
-        trackId = resolvedTrackId,
-        albumKey = extras?.getString(PlaybackModeMetadata.AlbumKey),
-        discNumber = extras?.takeIf { it.containsKey(PlaybackModeMetadata.DiscNumber) }
-            ?.getInt(PlaybackModeMetadata.DiscNumber),
-        trackNumber = extras?.takeIf { it.containsKey(PlaybackModeMetadata.TrackNumber) }
-            ?.getInt(PlaybackModeMetadata.TrackNumber),
-    )
 }

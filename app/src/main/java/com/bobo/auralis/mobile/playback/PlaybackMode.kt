@@ -1,6 +1,7 @@
 package com.bobo.auralis.mobile.playback
 
 import androidx.media3.common.Player
+import androidx.media3.common.MediaItem
 import com.bobo.auralis.mobile.library.model.TrackId
 import java.security.SecureRandom
 import java.util.Collections
@@ -31,7 +32,22 @@ internal data class PlaybackQueueTrack(
     val albumKey: String?,
     val discNumber: Int?,
     val trackNumber: Int?,
+    val queueIndex: Int? = null,
 )
+
+internal fun restoreQueueOrder(tracks: List<PlaybackQueueTrack>): List<PlaybackQueueTrack> =
+    tracks.sortedBy { it.queueIndex ?: Int.MAX_VALUE }
+
+internal fun MediaItem.toPlaybackQueueTrack(): PlaybackQueueTrack? {
+    val resolvedTrackId = mediaId.toTrackId() ?: return null
+    val extras = mediaMetadata.extras
+    return PlaybackQueueTrack(
+        resolvedTrackId, extras?.getString(PlaybackModeMetadata.AlbumKey),
+        extras?.takeIf { it.containsKey(PlaybackModeMetadata.DiscNumber) }?.getInt(PlaybackModeMetadata.DiscNumber),
+        extras?.takeIf { it.containsKey(PlaybackModeMetadata.TrackNumber) }?.getInt(PlaybackModeMetadata.TrackNumber),
+        extras?.takeIf { it.containsKey(PlaybackModeMetadata.QueueIndex) }?.getInt(PlaybackModeMetadata.QueueIndex),
+    )
+}
 
 internal fun playbackRepeatMode(mode: PlaybackMode): Int = when (mode) {
     PlaybackMode.Sequential,
@@ -109,6 +125,7 @@ internal val PlaybackQueueTrack.albumGroupKey: String
     get() = albumKey ?: "track:${trackId}"
 
 internal object PlaybackModeMetadata {
+    const val QueueIndex = "com.bobo.auralis.playback.QUEUE_INDEX"
     const val Mode = "com.bobo.auralis.playback.MODE"
     const val AlbumKey = "com.bobo.auralis.playback.ALBUM_KEY"
     const val DiscNumber = "com.bobo.auralis.playback.DISC_NUMBER"

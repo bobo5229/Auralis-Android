@@ -32,6 +32,7 @@ data class LibraryTrack(
     val isPlayable: Boolean,
     val unavailableReason: String?,
     val artworkSource: LibraryArtworkSource?,
+    val genres: List<String> = emptyList(),
 ) {
     val artistLabel: String
         get() = artists.takeIf { it.isNotEmpty() }?.joinToString("；") ?: "未知艺术家"

@@ -15,6 +15,7 @@ internal fun filterSongTracks(
         matches(track.title) ||
             track.artists.any(::matches) ||
             track.albumTitle?.let(::matches) == true ||
+            track.genres.any(::matches) ||
             track.albumId?.toString()?.let(albumsById::get)?.albumArtists.orEmpty()
                 .any(::matches)
     }

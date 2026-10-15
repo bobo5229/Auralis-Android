@@ -172,4 +172,17 @@ class ReconciliationDecisionTest {
             ReconciliationDecisionEngine.decideMissingState(wasRootReachable = true),
         )
     }
+
+    @Test
+    fun `failed directory protects its descendants but not similarly named siblings`() {
+        val scopes = listOf("primary/Music/Album")
+        for (path in listOf("primary/Music/Album/song.flac", "primary/Music/Album/Disc 2/song.flac")) {
+            assertEquals(SourceAvailabilityState.UNREACHABLE,
+                ReconciliationDecisionEngine.decideMissingState(true, path, scopes))
+        }
+        for (path in listOf("primary/Music/Album2/song.flac", "primary/Music/Other/song.flac")) {
+            assertEquals(SourceAvailabilityState.MISSING,
+                ReconciliationDecisionEngine.decideMissingState(true, path, scopes))
+        }
+    }
 }

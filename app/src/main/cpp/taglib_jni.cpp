@@ -299,6 +299,11 @@ Java_com_bobo_auralis_mobile_library_metadata_TagLibJNI_openNative(JNIEnv *env,
     } catch (std::exception &e) {
         LOGE("Unable to parse metadata in %s: %s", name.c_str(), e.what());
         delete overriddenFile;
+        // A JNI allocation failure may already have raised a Java exception.
+        // Preserve it for the caller; class/field lookups are invalid while pending.
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
         return metadataResultProviderFailed(env);
     }
 }

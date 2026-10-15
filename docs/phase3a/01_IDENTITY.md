@@ -447,6 +447,8 @@ Composer 当前不进入 Auralis Track identity。
 
 ## 10. TrackKey strength
 
+> 2026-10-15 实施勘误：下文的“两项证据”评分是历史设计，已由 `METADATA.md` §8.3 取代。当前 STRONG 必须同时具备 AlbumKey、非空 Title、至少一个 Artist、正整数 Disc Number 和 Track Number；任一缺失均为 WEAK，禁止跨物理源自动合并。
+
 TrackKey 要分：
 
 ```text

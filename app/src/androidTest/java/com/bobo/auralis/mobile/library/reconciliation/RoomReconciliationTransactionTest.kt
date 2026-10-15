@@ -4,11 +4,14 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.bobo.auralis.mobile.library.cache.CacheClassification
+import com.bobo.auralis.mobile.library.cache.SourceMetadataCache
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.db.entity.RootAvailabilityState
 import com.bobo.auralis.mobile.library.identity.AlbumIdentity
 import com.bobo.auralis.mobile.library.identity.AlbumKey
+import com.bobo.auralis.mobile.library.identity.IdentityDerivation
 import com.bobo.auralis.mobile.library.identity.TrackIdentity
 import com.bobo.auralis.mobile.library.identity.TrackKey
 import com.bobo.auralis.mobile.library.identity.TrackKeyStrength
@@ -23,6 +26,13 @@ import com.bobo.auralis.mobile.library.saf.SafDocumentKey
 import com.bobo.auralis.mobile.library.saf.SafPath
 import com.bobo.auralis.mobile.library.saf.SafRoot
 import com.bobo.auralis.mobile.library.scan.AudioFormat
+import com.bobo.auralis.mobile.library.model.PlayabilityState
+import com.bobo.auralis.mobile.playback.PlaybackSourceEvidence
+import com.bobo.auralis.mobile.playback.PlaybackSourceStateRepository
+import com.bobo.auralis.mobile.playback.PlaybackMediaItemResolver
+import com.bobo.auralis.mobile.playback.sourceEvidence
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -211,7 +221,8 @@ class RoomReconciliationTransactionTest {
         assertEquals(1, artists1.size)
         assertEquals("Artist A", graphDao.findArtistById(artists1[0].artistId)?.displayName)
 
-        // Now run reconcileMissingSources in scan 2 where Root 0 was clean and did not see Source A
+        // Only A is absent in scan 2; B was rediscovered successfully.
+        tx.reconcileObservation(obsB, root1Id, scanSessionId = 2L)
         tx.reconcileMissingSources(
             scanSessionId = 2L,
             rootIdToReachable = mapOf(root0Id to true, root1Id to true),
@@ -298,5 +309,179 @@ class RoomReconciliationTransactionTest {
         // New track is active with this source
         val active2 = sourceDao.findActiveSource(trackId2)
         assertNotNull(active2)
+    }
+
+    private fun regressionObservation(documentId: String): ResolvedObservation {
+        val observation = createObservation(
+            documentId = documentId,
+            rootRef = RootReference("content://music/root", 0),
+            relativePath = "$documentId/song.flac",
+            title = "Song",
+            album = "Album",
+            artists = listOf("Artist A", "Artist B"),
+            albumArtists = listOf("Album Artist"),
+            genres = listOf("Rock", "Pop"),
+            trackKeyHash = "unused",
+            albumKeyHash = "unused",
+        ).observation
+        val metadata = observation.metadata.copy(date = "2024-01-01")
+        return ResolvedObservation.of(observation.copy(metadata = metadata), IdentityDerivation.derive(metadata))
+    }
+
+    private fun withMetadata(original: ResolvedObservation, metadata: AuralisMetadata): ResolvedObservation =
+        ResolvedObservation.of(
+            original.observation.copy(metadata = metadata, modifiedMs = original.observation.modifiedMs + 1),
+            IdentityDerivation.derive(metadata),
+        )
+
+    @Test
+    fun sameActiveSourceRefreshesScalarsKeyAndOrderedRelations() = runBlocking {
+        val before = regressionObservation("A")
+        val trackId = tx.reconcileObservation(before, null, 1L)
+        val activeBefore = db.sourceDao().findActiveSource(trackId)
+        val after = withMetadata(before, before.observation.metadata.copy(
+            title = "Updated Song",
+            artists = listOf("Artist C", "Artist D"),
+            genres = listOf("Jazz", "Soul"),
+            discNumber = 2,
+            trackNumber = 3,
+        ))
+
+        assertEquals(trackId, tx.reconcileObservation(after, null, 2L))
+        assertEquals(activeBefore, db.sourceDao().findActiveSource(trackId))
+        val track = db.trackDao().findById(trackId)!!
+        assertEquals("Updated Song", track.title)
+        assertEquals(after.trackKey.hash, track.trackKeyHash)
+        assertEquals(2, track.discNumber)
+        assertEquals(3, track.trackNumber)
+        val graph = db.graphDao()
+        assertEquals(listOf("Artist C", "Artist D"), graph.trackArtists(trackId).map {
+            graph.findArtistById(it.artistId)!!.displayName
+        })
+        assertEquals(listOf("Jazz", "Soul"), graph.trackGenres(trackId).map {
+            graph.findGenreById(it.genreId)!!.displayName
+        })
+    }
+
+    @Test
+    fun genreOnlyEditRefreshesSameActiveSourceWithoutChangingIdentity() = runBlocking {
+        val before = regressionObservation("A")
+        val trackId = tx.reconcileObservation(before, null, 1L)
+        val after = withMetadata(before, before.observation.metadata.copy(genres = listOf("Jazz", "Soul")))
+        assertEquals(before.trackKey, after.trackKey)
+        tx.reconcileObservation(after, null, 2L)
+        val graph = db.graphDao()
+        assertEquals(listOf("Jazz", "Soul"), graph.trackGenres(trackId).map {
+            graph.findGenreById(it.genreId)!!.displayName
+        })
+    }
+
+    @Test
+    fun updatedInactiveSourceDoesNotMixItsGenresIntoTheWinner() = runBlocking {
+        val winner = regressionObservation("A")
+        val backup = regressionObservation("B")
+        val trackId = tx.reconcileObservation(winner, null, 1L)
+        assertEquals(trackId, tx.reconcileObservation(backup, null, 1L))
+        val after = withMetadata(backup, backup.observation.metadata.copy(genres = listOf("Jazz", "Soul")))
+        tx.reconcileObservation(after, null, 2L)
+        val graph = db.graphDao()
+        assertEquals(listOf("Rock", "Pop"), graph.trackGenres(trackId).map {
+            graph.findGenreById(it.genreId)!!.displayName
+        })
+    }
+
+    @Test
+    fun activeKeyEditIsVisibleToTheNextObservationInTheSameBatch() = runBlocking {
+        val before = regressionObservation("A")
+        val trackId = tx.reconcileObservation(before, null, 1L)
+        val after = withMetadata(before, before.observation.metadata.copy(title = "Updated Song"))
+        val duplicate = withMetadata(regressionObservation("B"), after.observation.metadata)
+        tx.reconcileObservationsBatch(
+            listOf(
+                RoomReconciliationTransaction.BatchItem(after, null),
+                RoomReconciliationTransaction.BatchItem(duplicate, null),
+            ),
+            scanSessionId = 2L,
+        )
+        assertEquals(1, db.trackDao().count())
+        assertEquals(2, db.sourceDao().findByTrack(trackId).size)
+        assertEquals(after.trackKey.hash, db.trackDao().findById(trackId)!!.trackKeyHash)
+    }
+
+    @Test
+    fun cacheHitReevaluatesLegacyStrengthWithoutUsingFileNameAsTitle() = runBlocking {
+        val observation = regressionObservation("A")
+        val trackId = tx.reconcileObservation(observation, null, 1L)
+        val source = db.sourceDao().findByTrack(trackId).single()
+        val metadata = db.sourceDao().findMetadata(source.sourceId)!!.copy(
+            title = null, discNumber = null, trackKeyStrength = TrackKeyStrength.STRONG,
+        )
+        val hydrated = SourceMetadataCache.hydrate(
+            hit = CacheClassification.Hit(source, metadata),
+            documentKey = observation.observation.documentKey,
+            rootTreeUri = observation.observation.root.treeUri,
+            rootPriority = 0,
+            uri = observation.observation.uri,
+            relativePath = observation.observation.relativePath,
+            fileName = source.fileName,
+            sizeBytes = source.sizeBytes,
+            modifiedMs = source.modifiedMs,
+            format = source.format,
+        )
+        assertNull(hydrated.trackIdentity.title)
+        assertEquals(TrackKeyStrength.WEAK, hydrated.trackKeyStrength)
+        // The cached rule correction must reach the logical track on a normal rescan.
+        tx.reconcileObservation(hydrated, null, 2L)
+        assertEquals(TrackKeyStrength.WEAK, db.trackDao().findById(trackId)!!.trackKeyStrength)
+    }
+
+    @Test
+    fun repairedFileClearsOldDecoderEvidenceButUnchangedFileKeepsIt() = runBlocking {
+        val before = regressionObservation("A")
+        val trackId = tx.reconcileObservation(before, null, 1L)
+        val source = db.sourceDao().findByTrack(trackId).single()
+        val evidence = PlaybackSourceEvidence(trackId, source.sourceId, source.modifiedMs, source.sizeBytes)
+        val repository = PlaybackSourceStateRepository(db)
+        repository.markUnplayable(evidence, PlaybackException("bad encoding", null, PlaybackException.ERROR_CODE_DECODING_FAILED))
+        tx.reconcileObservation(before, null, 2L)
+        assertEquals(PlayabilityState.UNPLAYABLE, db.sourceDao().findById(source.sourceId)!!.playabilityState)
+        assertNull(db.sourceDao().findActiveSource(trackId))
+
+        val repaired = withMetadata(before, before.observation.metadata)
+        tx.reconcileObservation(repaired, null, 3L)
+        assertEquals(PlayabilityState.UNKNOWN, db.sourceDao().findById(source.sourceId)!!.playabilityState)
+        assertEquals(source.sourceId, db.sourceDao().findActiveSource(trackId)?.sourceId)
+        // Delayed decoder evidence for the old bytes must not poison the repair.
+        repository.markUnplayable(evidence, PlaybackException("stale failure", null, PlaybackException.ERROR_CODE_DECODING_FAILED))
+        assertEquals(PlayabilityState.UNKNOWN, db.sourceDao().findById(source.sourceId)!!.playabilityState)
+    }
+
+    @Test
+    fun evidenceForPreviousActiveSourceNeverMarksTheReplacementSource() = runBlocking {
+        val trackId = tx.reconcileObservation(regressionObservation("A"), null, 1L)
+        tx.reconcileObservation(regressionObservation("B"), null, 1L)
+        val sourceA = db.sourceDao().findByDocumentKey("com.android.externalstorage.documents", "A")!!
+        val sourceB = db.sourceDao().findByDocumentKey("com.android.externalstorage.documents", "B")!!
+        val evidenceA = PlaybackSourceEvidence(trackId, sourceA.sourceId, sourceA.modifiedMs, sourceA.sizeBytes)
+        val repository = PlaybackSourceStateRepository(db)
+        val failure = PlaybackException("bad encoding", null, PlaybackException.ERROR_CODE_DECODING_FAILED)
+        repository.markUnplayable(evidenceA, failure)
+        assertEquals(sourceB.sourceId, db.sourceDao().findActiveSource(trackId)?.sourceId)
+        repository.markUnplayable(evidenceA, failure)
+        assertEquals(PlayabilityState.UNKNOWN, db.sourceDao().findById(sourceB.sourceId)!!.playabilityState)
+        assertEquals(sourceB.sourceId, db.sourceDao().findActiveSource(trackId)?.sourceId)
+    }
+
+    @Test
+    fun resolvedMediaItemCarriesTheActualSourceVersionAlongsideQueueMetadata() = runBlocking {
+        val trackId = tx.reconcileObservation(regressionObservation("A"), null, 1L)
+        val source = db.sourceDao().findByTrack(trackId).single()
+        val extras = android.os.Bundle().apply { putString("queue-test", "preserved") }
+        val request = MediaItem.Builder().setMediaId(trackId.toString())
+            .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setExtras(extras).build()).build()
+        val resolved = PlaybackMediaItemResolver(db).resolve(request)
+        assertEquals(PlaybackSourceEvidence(trackId, source.sourceId, source.modifiedMs, source.sizeBytes), resolved.sourceEvidence())
+        assertEquals("preserved", resolved.mediaMetadata.extras?.getString("queue-test"))
+        assertNull(request.mediaMetadata.extras?.getString("com.bobo.auralis.playback.SOURCE_ID"))
     }
 }

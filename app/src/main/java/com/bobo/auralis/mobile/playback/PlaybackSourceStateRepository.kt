@@ -11,12 +11,12 @@ import com.bobo.auralis.mobile.library.reconciliation.RoomReconciliationTransact
 class PlaybackSourceStateRepository(
     private val database: AuralisDatabase,
 ) {
-    suspend fun markPlayable(mediaId: String) {
-        val trackId = mediaId.toTrackId() ?: return
+    internal suspend fun markPlayable(evidence: PlaybackSourceEvidence) {
+        val trackId = evidence.trackId
         database.withTransaction {
             val sourceDao = database.sourceDao()
-            val active = sourceDao.findActiveSource(trackId) ?: return@withTransaction
-            val source = sourceDao.findById(active.sourceId) ?: return@withTransaction
+            val source = sourceDao.findById(evidence.sourceId) ?: return@withTransaction
+            if (!evidence.matches(source.trackId, source.sourceId, source.modifiedMs, source.sizeBytes)) return@withTransaction
             if (source.playabilityState != PlayabilityState.PLAYABLE) {
                 sourceDao.update(
                     source.copy(
@@ -26,19 +26,20 @@ class PlaybackSourceStateRepository(
                         failureMessage = source.failureMessage.takeUnless { source.failureStage == FAILURE_STAGE },
                     ),
                 )
+                RoomReconciliationTransaction(database).refreshActiveSourceForTrack(trackId)
             }
         }
     }
 
-    suspend fun markUnplayable(mediaId: String, error: PlaybackException) {
-        val trackId = mediaId.toTrackId() ?: return
+    internal suspend fun markUnplayable(evidence: PlaybackSourceEvidence, error: PlaybackException) {
+        val trackId = evidence.trackId
         database.withTransaction {
             val sourceDao = database.sourceDao()
-            val active = sourceDao.findActiveSource(trackId) ?: return@withTransaction
-            val source = sourceDao.findById(active.sourceId) ?: return@withTransaction
+            val source = sourceDao.findById(evidence.sourceId) ?: return@withTransaction
+            if (!evidence.matches(source.trackId, source.sourceId, source.modifiedMs, source.sizeBytes)) return@withTransaction
             sourceDao.update(
                 source.copy(
-                    playabilityState = PlayabilityState.UNPLAYABLE,
+                    playabilityState = if (isPermanentPlaybackFailure(error.errorCode)) PlayabilityState.UNPLAYABLE else PlayabilityState.UNKNOWN,
                     failureStage = FAILURE_STAGE,
                     failureCode = error.errorCodeName,
                     failureMessage = error.message,

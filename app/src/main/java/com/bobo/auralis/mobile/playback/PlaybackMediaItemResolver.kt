@@ -1,6 +1,7 @@
 package com.bobo.auralis.mobile.playback
 
 import android.net.Uri
+import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
@@ -41,7 +42,11 @@ class PlaybackMediaItemResolver(
             .setArtist(artists.takeIf { it.isNotEmpty() }?.joinToString(" ; "))
             .setAlbumTitle(albumTitle)
             .setIsPlayable(true)
-            .setExtras(request.mediaMetadata.extras)
+            .setExtras(Bundle(request.mediaMetadata.extras ?: Bundle()).apply {
+                putString(PlaybackSourceMetadata.SourceId, source.sourceId.toString())
+                putLong(PlaybackSourceMetadata.ModifiedMs, source.modifiedMs)
+                putLong(PlaybackSourceMetadata.SizeBytes, source.sizeBytes)
+            })
             .build()
 
         return MediaItem.Builder()

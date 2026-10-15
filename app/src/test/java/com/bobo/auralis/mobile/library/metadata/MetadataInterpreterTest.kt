@@ -8,6 +8,26 @@ import org.junit.Test
 
 class MetadataInterpreterTest {
 
+    @Test
+    fun rejectsImpossibleCalendarDatesAndMalformedTimestampSuffixes() {
+        for (raw in listOf("2024-02-30", "2023-02-29", "2024-13-01", "2024-00-01", "2024-01-00",
+            "2024-01-01T99:99:99Z", "2024-01-01 garbage", "2024-01-01T")) {
+            assertNull(raw, parseAuralisDate(raw))
+        }
+        assertEquals("2024-02-29", parseAuralisDate("2024-02-29"))
+        assertEquals("2024-02-29", parseAuralisDate("2024-02-29T12:30:00.123+08:00"))
+        assertEquals("2024-02-29", parseAuralisDate("2024-02-29 12:30:00"))
+    }
+
+    @Test
+    fun malformedPositionSegmentsDoNotBecomeValidTrackIdentity() {
+        for (raw in listOf("1/2/3", "1//2", "1/2/", "0/2", "-1/2", "999999999999/2")) {
+            assertEquals(raw, Pair<Int?, Int?>(null, null), parsePositionWithFallback(raw, "12"))
+            assertNull(raw, parsePosition(raw))
+        }
+        assertEquals(Pair(2, 12), parsePositionWithFallback("2", "12"))
+    }
+
     private val defaultProperties = Properties(
         durationMs = 180000L,
         bitrateKbps = 320,

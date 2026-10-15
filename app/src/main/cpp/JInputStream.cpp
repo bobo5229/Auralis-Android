@@ -46,7 +46,7 @@ JInputStream::JInputStream(JNIEnv *env, jobject jInputStream) : env(env), jInput
     jInputStreamLengthMethod = jInputStreamClass.method("length", "()J");
     JStringRef jName = { env, reinterpret_cast<jstring>(env->CallObjectMethod(
             jInputStream, jInputStreamNameMethod)) };
-    _name = TagLib::String(env->GetStringUTFChars(*jName, nullptr));
+    _name = jName.copy();
 }
 
 JInputStream::~JInputStream() {

@@ -551,7 +551,7 @@ fun DemoTracksScreen(
     bottomPadding: Dp,
     listState: LazyListState,
     currentTrackId: String?,
-    onTrackClick: (LibraryTrack) -> Unit,
+    onTrackClick: (LibraryTrack, List<LibraryTrack>) -> Unit,
     title: String = "歌曲",
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
@@ -611,7 +611,7 @@ fun DemoTracksScreen(
             val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.62f)
             Row(
                 modifier = Modifier.fillMaxWidth()
-                    .clickable(enabled = track.isPlayable) { onTrackClick(track) }
+                    .clickable(enabled = track.isPlayable) { onTrackClick(track, visibleTracks) }
                     .alpha(if (track.isPlayable) 1f else 0.46f)
                     .background(rowColor)
                     .drawBehind {

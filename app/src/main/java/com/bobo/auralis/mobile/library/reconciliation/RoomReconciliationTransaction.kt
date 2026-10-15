@@ -78,8 +78,8 @@ class RoomReconciliationTransaction(
             documentId = obs.documentKey.documentId,
         )
 
+        val existingMeta = existingPhysicalSourceEntity?.let { sourceDao.findMetadata(it.sourceId) }
         val existingPhysicalSnapshot = existingPhysicalSourceEntity?.let { source ->
-            val existingMeta = sourceDao.findMetadata(source.sourceId)
             ExistingSourceSnapshot(
                 sourceId = source.sourceId,
                 trackId = source.trackId,
@@ -119,6 +119,10 @@ class RoomReconciliationTransaction(
 
         val targetTrackId: TrackId
         val targetSourceId: TrackSourceId
+        val versionChanged = existingPhysicalSourceEntity?.let {
+            it.modifiedMs != obs.modifiedMs || it.sizeBytes != obs.sizeBytes
+        } ?: false
+        val keepPlaybackFailure = !versionChanged && existingPhysicalSourceEntity?.failureStage == "playback"
 
         when (decision) {
             is ReconcileDecision.RetainPhysicalTrack -> {
@@ -139,11 +143,12 @@ class RoomReconciliationTransaction(
                     sampleRateHz = meta.sampleRateHz ?: existingPhysicalSourceEntity.sampleRateHz,
                     availabilityState = SourceAvailabilityState.AVAILABLE,
                     parseState = ParseState.PARSED,
+                    playabilityState = if (versionChanged) PlayabilityState.UNKNOWN else existingPhysicalSourceEntity.playabilityState,
                     lastSeenScanId = scanSessionId,
                     lastSeenAt = timestamp,
-                    failureStage = null,
-                    failureCode = null,
-                    failureMessage = null,
+                    failureStage = existingPhysicalSourceEntity.failureStage.takeIf { keepPlaybackFailure },
+                    failureCode = existingPhysicalSourceEntity.failureCode.takeIf { keepPlaybackFailure },
+                    failureMessage = existingPhysicalSourceEntity.failureMessage.takeIf { keepPlaybackFailure },
                 )
                 sourceDao.update(updatedSource)
             }
@@ -185,11 +190,12 @@ class RoomReconciliationTransaction(
                     sampleRateHz = meta.sampleRateHz ?: existingPhysicalSourceEntity.sampleRateHz,
                     availabilityState = SourceAvailabilityState.AVAILABLE,
                     parseState = ParseState.PARSED,
+                    playabilityState = if (versionChanged) PlayabilityState.UNKNOWN else existingPhysicalSourceEntity.playabilityState,
                     lastSeenScanId = scanSessionId,
                     lastSeenAt = timestamp,
-                    failureStage = null,
-                    failureCode = null,
-                    failureMessage = null,
+                    failureStage = existingPhysicalSourceEntity.failureStage.takeIf { keepPlaybackFailure },
+                    failureCode = existingPhysicalSourceEntity.failureCode.takeIf { keepPlaybackFailure },
+                    failureMessage = existingPhysicalSourceEntity.failureMessage.takeIf { keepPlaybackFailure },
                 )
                 sourceDao.update(updatedSource)
 
@@ -306,9 +312,18 @@ class RoomReconciliationTransaction(
         )
         sourceDao.insertMetadata(snapshot)
 
-        // 5. Select active source and project graph if winner changed (§40)
-        if (autoRefreshActiveSource) {
-            refreshActiveSourceForTrack(targetTrackId, timestamp)
+        // A changed active snapshot must be projected even when its source ID stays
+        // the same. Do it within the batch too, so later semantic lookups see the
+        // updated TrackKey instead of creating a duplicate from the old index.
+        val metadataChanged = existingMeta != snapshot
+        val activeMetadataChanged = metadataChanged &&
+            sourceDao.findActiveSource(targetTrackId)?.sourceId == targetSourceId
+        if (autoRefreshActiveSource || activeMetadataChanged) {
+            refreshActiveSourceForTrack(
+                targetTrackId,
+                timestamp,
+                updatedMetadataSourceId = targetSourceId.takeIf { metadataChanged },
+            )
         }
 
         return targetTrackId
@@ -359,6 +374,7 @@ class RoomReconciliationTransaction(
         scanSessionId: Long,
         rootIdToReachable: Map<LibraryRootId, Boolean>,
         timestamp: Long = System.currentTimeMillis(),
+        unavailableScopes: Map<LibraryRootId, List<String>> = emptyMap(),
     ) = database.withTransaction {
         val sourceDao = database.sourceDao()
         val unseenSources = sourceDao.findNotSeenInScan(scanSessionId)
@@ -367,7 +383,11 @@ class RoomReconciliationTransaction(
 
         for (source in unseenSources) {
             val isReachable = source.rootId?.let { rootIdToReachable[it] } ?: false
-            val newState = ReconciliationDecisionEngine.decideMissingState(wasRootReachable = isReachable)
+            val newState = ReconciliationDecisionEngine.decideMissingState(
+                wasRootReachable = isReachable,
+                sourcePath = source.relativePath,
+                unavailableScopes = unavailableScopes[source.rootId].orEmpty(),
+            )
 
             if (source.availabilityState != newState) {
                 sourceDao.update(source.copy(availabilityState = newState))
@@ -387,6 +407,7 @@ class RoomReconciliationTransaction(
     suspend fun refreshActiveSourceForTrack(
         trackId: TrackId,
         timestamp: Long = System.currentTimeMillis(),
+        updatedMetadataSourceId: TrackSourceId? = null,
     ) {
         val sourceDao = database.sourceDao()
         val trackDao = database.trackDao()
@@ -419,12 +440,12 @@ class RoomReconciliationTransaction(
         }
 
         val winnerSourceId = winnerCandidate.sourceId
-        if (currentActive?.sourceId == winnerSourceId) {
-            // Winner unchanged (§40): do not rebuild logical metadata
+        if (currentActive?.sourceId == winnerSourceId && updatedMetadataSourceId != winnerSourceId) {
+            // Neither the winner nor its snapshot changed: keep the existing graph.
             return
         }
 
-        // Winner changed! Atomically apply §40 steps 1-5:
+        // Winner or its metadata changed: atomically project the winning snapshot.
         // 1. update TrackActiveSource
         sourceDao.setActiveSource(TrackActiveSourceEntity(trackId = trackId, sourceId = winnerSourceId))
 

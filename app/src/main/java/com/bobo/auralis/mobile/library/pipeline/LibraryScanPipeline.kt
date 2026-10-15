@@ -3,6 +3,7 @@ package com.bobo.auralis.mobile.library.pipeline
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
+import androidx.room.withTransaction
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.db.entity.RootAvailabilityState
@@ -27,10 +28,14 @@ import com.bobo.auralis.mobile.library.saf.SafQuery
 import com.bobo.auralis.mobile.library.saf.SafScanEvent
 import com.bobo.auralis.mobile.library.saf.SafScanner
 import com.bobo.auralis.mobile.library.scan.AudioFormat
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 
 /**
  * Summary report of an executed library scan session.
+ * Discovery counts include overlapping-root aliases; parse outcomes count unique documents.
+ * cacheHits counts actual hydrations, cacheMisses actual extraction attempts (including failures).
+ * Work counts can vary with discovery order even when the unique outcomes are identical.
  */
 data class ScanSessionReport(
     val scanId: Long,
@@ -46,6 +51,8 @@ data class ScanSessionReport(
     val rootsCompleted: Int,
     val unavailableDirectories: Int,
     val directoryFailures: List<DirectoryScanFailure> = emptyList(),
+    val uniqueAudioCandidatesDiscovered: Int = 0,
+    val extractionFailures: Int = 0,
 )
 
 /** A recoverable SAF directory query failure captured for diagnostic export. */
@@ -85,6 +92,7 @@ class LibraryScanPipeline(
     private val database: AuralisDatabase,
     private val extractor: MetadataExtractor = MetadataExtractor.from(context),
     private val transaction: RoomReconciliationTransaction = RoomReconciliationTransaction(database),
+    private val scan: (SafQuery) -> Flow<SafScanEvent> = { SafScanner.from(context, it).scan() },
 ) {
 
     /**
@@ -130,24 +138,21 @@ class LibraryScanPipeline(
         }
 
         val failedRootUris = mutableSetOf<String>()
+        val unavailableScopes = mutableMapOf<LibraryRootId, MutableList<String>>()
+        val parsedRootPriorities = mutableMapOf<com.bobo.auralis.mobile.library.saf.SafDocumentKey, Int>()
         var totalFiles = 0
-        var audioCandidates = 0
-        var parsedSuccess = 0
-        var parseFailed = 0
+        val fileCounts = ScanFileCounts()
         var cacheHits = 0
         var cacheMisses = 0
         var unavailableDirs = 0
         val directoryFailures = mutableListOf<DirectoryScanFailure>()
 
-        val scanner = SafScanner.from(
-            context = context,
-            query = SafQuery(source = openedRoots, withHidden = false, multithread = true),
-        )
+        val query = SafQuery(source = openedRoots, withHidden = false, multithread = true)
 
         val batch = mutableListOf<RoomReconciliationTransaction.BatchItem>()
         val batchSize = 150
 
-        scanner.scan().collect { event ->
+        scan(query).collect { event ->
             when (event) {
                 is SafScanEvent.Found -> {
                     totalFiles++
@@ -156,10 +161,15 @@ class LibraryScanPipeline(
                     val format = AudioFormat.fromFileName(fileName)
 
                     if (format != null) {
-                        audioCandidates++
+                        fileCounts.discovered(file.documentKey)
                         val rootEntity = rootByUri[file.root.uri.toString()]
                         val rootPriority = rootEntity?.priority ?: Int.MAX_VALUE
                         val rootId = rootEntity?.rootId
+                        // A lower-priority overlapping tree must never overwrite a successful
+                        // observation from an earlier root, regardless of traversal order.
+                        if (parsedRootPriorities[file.documentKey]?.let { it <= rootPriority } == true) {
+                            return@collect
+                        }
 
                         // Step 1: Check metadata extraction cache (PHASE 3B §5)
                         val existingSource = sourceDao.findByDocumentKey(
@@ -176,7 +186,7 @@ class LibraryScanPipeline(
                         when (classification) {
                             is com.bobo.auralis.mobile.library.cache.CacheClassification.Hit -> {
                                 cacheHits++
-                                parsedSuccess++
+                                fileCounts.parsed(file.documentKey)
                                 // Hydrate observation instantly without file IO or TagLib JNI
                                 val hydrated = com.bobo.auralis.mobile.library.cache.SourceMetadataCache.hydrate(
                                     hit = classification,
@@ -185,13 +195,17 @@ class LibraryScanPipeline(
                                     format = format,
                                 )
                                 batch.add(RoomReconciliationTransaction.BatchItem(hydrated, rootId))
+                                parsedRootPriorities[file.documentKey] = rootPriority
                             }
 
                             is com.bobo.auralis.mobile.library.cache.CacheClassification.Stale,
                             is com.bobo.auralis.mobile.library.cache.CacheClassification.Miss -> {
                                 cacheMisses++
                                 // Step 2: Fresh TagLib JNI extraction outside DB transaction
-                                val extractResult = extractor.extract(MetadataTarget(file.uri, fileName))
+                                val extraction = extractMetadataForScan {
+                                    extractor.extract(MetadataTarget(file.uri, fileName))
+                                }
+                                val extractResult = extraction.result
 
                                 if (extractResult is MetadataResult.Success && extractResult.metadata != null) {
                                     val interpreted = extractResult.metadata.interpret()
@@ -214,8 +228,15 @@ class LibraryScanPipeline(
                                     val resolved = ResolvedObservation.of(observation, identity)
 
                                     batch.add(RoomReconciliationTransaction.BatchItem(resolved, rootId))
-                                    parsedSuccess++
+                                    parsedRootPriorities[file.documentKey] = rootPriority
+                                    fileCounts.parsed(file.documentKey)
                                 } else {
+                                    fileCounts.failed(file.documentKey)
+                                    // Another authorized tree already opened this physical file.
+                                    // A failed alias must not invalidate that usable observation.
+                                    if (file.documentKey in parsedRootPriorities) {
+                                        return@collect
+                                    }
                                     // Flush current batch before handling error
                                     if (batch.isNotEmpty()) {
                                         transaction.reconcileObservationsBatch(
@@ -230,10 +251,9 @@ class LibraryScanPipeline(
                                         format = format,
                                         rootId = rootId,
                                         scanSessionId = scanSessionId,
-                                        extractResult = extractResult,
+                                        extraction = extraction,
                                         timestamp = startedAtSystem,
                                     )
-                                    parseFailed++
                                 }
                             }
                         }
@@ -252,6 +272,9 @@ class LibraryScanPipeline(
 
                 is SafScanEvent.DirectoryUnavailable -> {
                     unavailableDirs++
+                    rootByUri[event.root.uri.toString()]?.rootId?.let { rootId ->
+                        unavailableScopes.getOrPut(rootId) { mutableListOf() }.add(event.path.toString())
+                    }
                     directoryFailures += DirectoryScanFailure(
                         rootUri = event.root.uri.toString(),
                         rootPath = event.root.path.toString(),
@@ -286,6 +309,7 @@ class LibraryScanPipeline(
             scanSessionId = scanSessionId,
             rootIdToReachable = rootIdToReachable,
             timestamp = startedAtSystem,
+            unavailableScopes = unavailableScopes,
         )
 
         // Update root status
@@ -295,6 +319,7 @@ class LibraryScanPipeline(
             rootDao.update(
                 root.copy(
                     availabilityState = if (isSuccess) RootAvailabilityState.AVAILABLE else RootAvailabilityState.UNAVAILABLE,
+                    lastAttemptedScanAt = startedAtSystem,
                     lastSuccessfulScanAt = if (isSuccess) startedAtSystem else root.lastSuccessfulScanAt,
                 )
             )
@@ -307,15 +332,17 @@ class LibraryScanPipeline(
             startedAt = startedAtSystem,
             elapsedMs = elapsed,
             totalFilesDiscovered = totalFiles,
-            audioCandidatesDiscovered = audioCandidates,
-            parsedSuccessfully = parsedSuccess,
-            parseFailed = parseFailed,
+            audioCandidatesDiscovered = fileCounts.audioCandidatesDiscovered,
+            parsedSuccessfully = fileCounts.parsedSuccessfully,
+            parseFailed = fileCounts.parseFailed,
             cacheHits = cacheHits,
             cacheMisses = cacheMisses,
             rootsAttempted = roots.size,
             rootsCompleted = completedCount,
             unavailableDirectories = unavailableDirs,
             directoryFailures = directoryFailures.toList(),
+            uniqueAudioCandidatesDiscovered = fileCounts.uniqueAudioCandidatesDiscovered,
+            extractionFailures = fileCounts.extractionFailures,
         )
     }
 
@@ -324,16 +351,18 @@ class LibraryScanPipeline(
         format: AudioFormat,
         rootId: LibraryRootId?,
         scanSessionId: Long,
-        extractResult: MetadataResult,
+        extraction: ScanMetadataExtraction,
         timestamp: Long,
-    ) {
+    ) = database.withTransaction {
         val sourceDao = database.sourceDao()
         val trackDao = database.trackDao()
 
         val existing = sourceDao.findByDocumentKey(file.documentKey.provider, file.documentKey.documentId)
-        val failureCode = extractResult::class.java.simpleName
+        val failureCode = extraction.failureCode
+        val trackId: TrackId
 
         if (existing != null) {
+            trackId = existing.trackId
             sourceDao.update(
                 existing.copy(
                     rootId = rootId ?: existing.rootId,
@@ -345,15 +374,20 @@ class LibraryScanPipeline(
                     modifiedMs = file.modifiedMs,
                     availabilityState = SourceAvailabilityState.AVAILABLE,
                     parseState = ParseState.FAILED,
+                    playabilityState = if (existing.modifiedMs != file.modifiedMs || existing.sizeBytes != file.size) {
+                        PlayabilityState.UNKNOWN
+                    } else existing.playabilityState,
                     lastSeenScanId = scanSessionId,
                     lastSeenAt = timestamp,
                     failureStage = "extraction",
                     failureCode = failureCode,
+                    failureMessage = extraction.failureMessage,
                 )
             )
         } else {
             // New unparsed source: gets its own TrackId (never merges with existing semantic tracks, §23)
             val newTrackId = TrackId.random()
+            trackId = newTrackId
             val newTrack = com.bobo.auralis.mobile.library.db.entity.TrackEntity(
                 trackId = newTrackId,
                 trackKeyVersion = 1,
@@ -394,9 +428,10 @@ class LibraryScanPipeline(
                 lastSeenAt = timestamp,
                 failureStage = "extraction",
                 failureCode = failureCode,
-                failureMessage = null,
+                failureMessage = extraction.failureMessage,
             )
             sourceDao.insert(newSource)
         }
+        transaction.refreshActiveSourceForTrack(trackId, timestamp)
     }
 }

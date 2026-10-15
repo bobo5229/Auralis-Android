@@ -2,6 +2,10 @@ package com.bobo.auralis.mobile.ui.demo
 
 import com.bobo.auralis.mobile.library.browser.LibraryAlbum
 import com.bobo.auralis.mobile.library.browser.LibraryTrack
+import com.bobo.auralis.mobile.library.browser.LibrarySnapshot
+import com.bobo.auralis.mobile.library.browser.projectGenreSnapshot
+import com.bobo.auralis.mobile.library.db.dao.TrackGenreNameRow
+import com.bobo.auralis.mobile.library.model.GenreId
 import com.bobo.auralis.mobile.library.model.AlbumId
 import com.bobo.auralis.mobile.library.model.TrackId
 import org.junit.Assert.assertEquals
@@ -9,6 +13,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SongSearchTest {
+
+    @Test fun everyIndependentGenreIsSearchableIncludingTraditionalTextAndPunctuation() {
+        val tagged = first.copy(genres = listOf("電子樂", "R&B/Soul", "Hip-hop/Rap"))
+        for (query in listOf("电子乐", "電子樂", "r&b/soul", "hip-hop/rap")) {
+            assertEquals(listOf(tagged), filterSongTracks(listOf(tagged, second), albums, query))
+        }
+        assertEquals(listOf("電子樂", "R&B/Soul", "Hip-hop/Rap"), tagged.genres)
+    }
+
+    @Test fun projectedGenreRelationsReachSongAlbumAndGenrePagesAndDisappearWhenRemoved() {
+        val genre = GenreId.random()
+        val snapshot = LibrarySnapshot(albums.values.toList(), tracks)
+        val projected = projectGenreSnapshot(snapshot, listOf(
+            TrackGenreNameRow(genre, "R&B/Soul", first.trackId, 1),
+            TrackGenreNameRow(GenreId.random(), "電子樂", first.trackId, 0),
+        ))
+        val tagged = projected.tracks.first { it.trackId == first.trackId }
+        assertEquals(listOf("電子樂", "R&B/Soul"), tagged.genres)
+        assertEquals(listOf(tagged), filterSongTracks(projected.tracks, albums, "R&B/Soul"))
+        assertEquals(tagged, projected.albums.first { it.albumId == firstAlbum }.tracks.single())
+        assertEquals(tagged, projected.genres.first { it.genreId == genre }.tracks.single())
+        val removed = projectGenreSnapshot(projected, emptyList())
+        assertTrue(filterSongTracks(removed.tracks, albums, "R&B/Soul").isEmpty())
+    }
     private val firstAlbum = AlbumId.random()
     private val secondAlbum = AlbumId.random()
     private val first = song(firstAlbum, "夜曲", listOf("Singer", "Guest"))

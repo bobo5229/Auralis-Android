@@ -20,8 +20,7 @@ private class MetadataExtractorImpl(private val contentResolver: ContentResolver
     override suspend fun extract(target: MetadataTarget): MetadataResult =
         withContext(Dispatchers.IO) {
             contentResolver.openFileDescriptor(target.uri, "r")?.use { fd ->
-                val fis = FileInputStream(fd.fileDescriptor)
-                TagLibJNI.open(target, fis).also { fis.close() }
+                FileInputStream(fd.fileDescriptor).use { fis -> TagLibJNI.open(target, fis) }
             } ?: MetadataResult.ProviderFailed
         }
 }

@@ -96,9 +96,6 @@ internal fun AuralisDemoApp(
     val context = LocalContext.current
     val library by viewModel.library.collectAsStateWithLifecycle()
     val playback by viewModel.playback.collectAsStateWithLifecycle()
-    LaunchedEffect(playbackMode, playback.isConnected) {
-        if (playback.isConnected) viewModel.restorePlaybackMode(playbackMode)
-    }
     when {
         library == null -> LibraryLoadingScreen()
         library?.tracks.isNullOrEmpty() -> DemoWelcomeScreen(
@@ -132,7 +129,7 @@ internal fun AuralisDemoApp(
 private fun DemoProductShell(
     library: LibrarySnapshot,
     playback: PlaybackConnectionState,
-    onPlay: (com.bobo.auralis.mobile.library.model.TrackId) -> Unit,
+    onPlay: (com.bobo.auralis.mobile.library.model.TrackId, List<com.bobo.auralis.mobile.library.browser.LibraryTrack>) -> Unit,
     onTogglePlayback: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
@@ -294,7 +291,7 @@ private fun DemoProductShell(
                         bottomPadding = contentBottomPadding,
                         listState = tracksListState,
                         currentTrackId = playback.currentMediaId,
-                        onTrackClick = { onPlay(it.trackId) },
+                        onTrackClick = { track, queue -> onPlay(track.trackId, queue) },
                     )
                 }
                 composable("library/playlists") { DemoPlaylistsScreen(contentBottomPadding) }
@@ -314,7 +311,7 @@ private fun DemoProductShell(
                             bottomPadding = contentBottomPadding,
                             listState = genreTracksListState,
                             currentTrackId = playback.currentMediaId,
-                            onTrackClick = { onPlay(it.trackId) },
+                            onTrackClick = { track, queue -> onPlay(track.trackId, queue) },
                             title = genre.displayName,
                         )
                     }
@@ -328,8 +325,8 @@ private fun DemoProductShell(
                             album = album,
                             bottomPadding = contentBottomPadding,
                             currentTrackId = playback.currentMediaId,
-                            onPlayAlbum = { album.tracks.firstOrNull { it.isPlayable }?.let { onPlay(it.trackId) } },
-                            onTrackClick = { onPlay(it.trackId) },
+                            onPlayAlbum = { album.tracks.firstOrNull { it.isPlayable }?.let { onPlay(it.trackId, album.tracks) } },
+                            onTrackClick = { onPlay(it.trackId, album.tracks) },
                         )
                     }
                 }

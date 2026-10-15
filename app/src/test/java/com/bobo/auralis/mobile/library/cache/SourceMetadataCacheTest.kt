@@ -19,6 +19,16 @@ import org.junit.Test
 
 class SourceMetadataCacheTest {
 
+    @Test
+    fun `legacy impossible date is re-extracted even when file stats match`() {
+        val classification = SourceMetadataCache.classify(
+            fileSize = 1000L, fileModifiedMs = 2000L,
+            existingSource = sampleSourceEntity(),
+            cachedMetadata = sampleMetadataEntity().copy(date = "2024-02-30"),
+        )
+        assertTrue(classification is CacheClassification.Stale)
+    }
+
     private val sampleSourceId = TrackSourceId.random()
     private val sampleTrackId = TrackId.random()
 

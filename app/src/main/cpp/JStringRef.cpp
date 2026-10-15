@@ -19,6 +19,9 @@
 #include "JStringRef.h"
 #include "util.h"
 
+#include <memory>
+#include <stdexcept>
+
 JStringRef::JStringRef(JNIEnv *env, jstring jString) : env(env), string(jString) {
 }
 
@@ -32,10 +35,20 @@ JStringRef::~JStringRef() {
 }
 
 TagLib::String JStringRef::copy() {
-    auto chars = env->GetStringUTFChars(string, nullptr);
-    TagLib::String result = chars;
-    env->ReleaseStringUTFChars(string, chars);
-    return result;
+    if (string == nullptr) {
+        throw std::runtime_error("Cannot copy a null Java string");
+    }
+    const auto release = [this](const char *chars) {
+        env->ReleaseStringUTFChars(string, chars);
+    };
+    // Release the JNI buffer before its local reference, including when the
+    // TagLib string allocation throws. TagLib owns its copied string data.
+    std::unique_ptr<const char, decltype(release)> chars(
+            env->GetStringUTFChars(string, nullptr), release);
+    if (!chars) {
+        throw std::runtime_error("Unable to acquire Java string UTF chars");
+    }
+    return TagLib::String(chars.get());
 }
 
 jstring& JStringRef::operator*() {

@@ -8,6 +8,9 @@
 
 package com.bobo.auralis.mobile.library.metadata
 
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 /**
  * Splits strings strictly by ASCII semicolon (';'), trims leading and trailing
  * whitespace, and drops empty/blank segments.
@@ -40,8 +43,20 @@ private val AURALIS_DATE_REGEX = Regex("""^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$""")
  */
 fun parseAuralisDate(raw: String?): String? {
     if (raw.isNullOrBlank()) return null
-    val match = AURALIS_DATE_REGEX.matchEntire(raw.trim()) ?: return null
-    return match.groupValues[1]
+    val value = raw.trim()
+    val match = AURALIS_DATE_REGEX.matchEntire(value) ?: return null
+    val date = match.groupValues[1]
+    return try {
+        LocalDate.parse(date, DateTimeFormatter.ISO_LOCAL_DATE)
+        if (value.length > 10) {
+            // Preserve the existing supported space-separated timestamp spelling.
+            val timestamp = if (value[10] == ' ') value.replaceRange(10, 11, "T") else value
+            DateTimeFormatter.ISO_DATE_TIME.parse(timestamp)
+        }
+        date
+    } catch (_: DateTimeParseException) {
+        null
+    }
 }
 
 /**
@@ -52,6 +67,7 @@ fun parseAuralisDate(raw: String?): String? {
 fun parsePositionWithFallback(raw: String?, fallbackTotalRaw: String? = null): Pair<Int?, Int?> {
     if (raw.isNullOrBlank()) return Pair(null, null)
     val parts = raw.split('/')
+    if (parts.size > 2) return Pair(null, null)
     val index = parts.getOrNull(0)?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: return Pair(null, null)
     val totalFromSlash = parts.getOrNull(1)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
     val total = totalFromSlash ?: fallbackTotalRaw?.trim()?.toIntOrNull()?.takeIf { it > 0 }

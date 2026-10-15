@@ -9,11 +9,8 @@ data class Position(val index: Int, val total: Int?) {
 }
 
 fun parsePosition(raw: String?): Position? {
-    if (raw.isNullOrBlank()) return null
-    val parts = raw.split('/')
-    val index = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: return null
-    val total = parts.getOrNull(1)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
-    return Position(index, total)
+    val (index, total) = parsePositionWithFallback(raw)
+    return index?.let { Position(it, total) }
 }
 
 /**
