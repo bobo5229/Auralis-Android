@@ -2,10 +2,8 @@ package com.bobo.auralis.mobile.debug
 
 import android.content.Context
 import android.net.Uri
-import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
@@ -20,32 +18,17 @@ import com.bobo.auralis.mobile.library.metadata.interpret
 import com.bobo.auralis.mobile.library.metadata.toRawDisplay
 import com.bobo.auralis.mobile.diagnostics.DiagnosticExportFormat
 import com.bobo.auralis.mobile.diagnostics.DiagnosticReportFormatter
-import com.bobo.auralis.mobile.diagnostics.buildDiagnosticReport
-import com.bobo.auralis.mobile.library.pipeline.LibraryScanPipeline
-import com.bobo.auralis.mobile.library.pipeline.ScanSessionReport
 import com.bobo.auralis.mobile.library.model.AlbumId
-import com.bobo.auralis.mobile.library.saf.LibraryRootRepository
-import com.bobo.auralis.mobile.library.saf.SafLocation
 import com.bobo.auralis.mobile.library.scan.CandidateAudio
 import com.bobo.auralis.mobile.playback.PlaybackConnectionState
 import com.bobo.auralis.mobile.playback.PlaybackControllerConnection
 import com.bobo.auralis.mobile.playback.PlaybackQueueTrack
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/** Temporary Technical Spike scan status. */
-enum class ScanStatus(val label: String) {
-    Idle("空闲"),
-    Scanning("扫描中"),
-    Completed("已完成"),
-    Failed("失败"),
-}
 
 /** A directory that could not be queried during a scan, kept for the debug UI. */
 data class ScanErrorItem(
@@ -65,48 +48,21 @@ data class ScanErrorItem(
 class SafDebugController(context: Context) {
     private val appContext = context.applicationContext
     private val database = AuralisDatabase.get(appContext)
-    private val rootRepository = LibraryRootRepository(appContext, database)
-    private val pipeline = LibraryScanPipeline(appContext, database)
+    private val management = (appContext as com.bobo.auralis.mobile.AuralisApplication).libraryManagement
     private val playbackConnection = PlaybackControllerConnection(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var scanJob: Job? = null
-
-    var roots by mutableStateOf<List<LibraryRootEntity>>(emptyList())
-        private set
-
-    var status by mutableStateOf(ScanStatus.Idle)
-        private set
-
-    var totalFileCount by mutableStateOf(0)
-        private set
-
-    var candidateCount by mutableStateOf(0)
-        private set
-
-    var errorCount by mutableStateOf(0)
-        private set
-
-    var cacheHits by mutableStateOf(0)
-        private set
-
-    var cacheMisses by mutableStateOf(0)
-        private set
-
-    var elapsedMs by mutableStateOf(0L)
-        private set
-
-    private var latestScanReport: ScanSessionReport? = null
-    private var latestScanFailure: String? = null
-
-    var isExportingDiagnostics by mutableStateOf(false)
-        private set
-
-    var diagnosticMessage by mutableStateOf<String?>(null)
-        private set
-
-    /** Transient action/scan error, shown at the top of the debug page. */
-    var message by mutableStateOf<String?>(null)
-        private set
+    private var managementState by mutableStateOf(management.state.value)
+    val roots get() = managementState.roots
+    val status get() = managementState.status
+    val totalFileCount get() = managementState.report?.totalFilesDiscovered ?: 0
+    val candidateCount get() = managementState.report?.audioCandidatesDiscovered ?: 0
+    val errorCount get() = managementState.report?.let { it.unavailableDirectories + it.parseFailed } ?: 0
+    val cacheHits get() = managementState.report?.cacheHits ?: 0
+    val cacheMisses get() = managementState.report?.cacheMisses ?: 0
+    val elapsedMs get() = managementState.report?.elapsedMs ?: 0L
+    val isExportingDiagnostics get() = managementState.exporting
+    val diagnosticMessage get() = managementState.diagnosticMessage
+    val message get() = managementState.message
 
     /** Candidate audio files discovered by the latest scan, in discovery order. */
     val candidates = mutableStateListOf<CandidateAudio>()
@@ -138,8 +94,16 @@ class SafDebugController(context: Context) {
 
     init {
         scope.launch {
-            roots = rootRepository.initialize()
-            refreshDatabaseTracks()
+            var firstEmission = true
+            management.state.collect { next ->
+                val previous = managementState
+                managementState = next
+                if (next.initialized && !next.busy &&
+                    (firstEmission || !previous.initialized || previous.busy || previous.roots != next.roots || previous.report != next.report)) {
+                    refreshDatabaseTracks()
+                }
+                firstEmission = false
+            }
         }
         scope.launch {
             playbackConnection.state.collect { playback = it }
@@ -195,55 +159,22 @@ class SafDebugController(context: Context) {
         inspectError = null
     }
 
-    /** Every unreachable directory reported by the latest scan. */
-    val errors = mutableStateListOf<ScanErrorItem>()
-
-    private val rootErrors = mutableStateMapOf<Uri, String>()
-
-    val isScanning: Boolean
-        get() = status == ScanStatus.Scanning
-
-    /** Non-null when [root] itself was unreachable during the latest scan. */
-    fun rootErrorFor(root: LibraryRootEntity): String? = rootErrors[Uri.parse(root.treeUri)]
-
-    fun addRoot(uri: Uri?) {
-        if (uri == null || isScanning) return
-
-        val opened = SafLocation.fromPickerResult(appContext, uri)
-        if (opened == null) {
-            message = "无法取得该目录的持久读权限，请重新选择"
-            return
+    /** Project shared scan diagnostics for the inspection UI. */
+    val errors: List<ScanErrorItem>
+        get() = managementState.report?.directoryFailures.orEmpty().map { failure ->
+            ScanErrorItem(
+                Uri.parse(failure.rootUri),
+                roots.firstOrNull { it.treeUri == failure.rootUri }?.displayPath ?: failure.rootPath,
+                failure.path, failure.path == failure.rootPath,
+                listOfNotNull(failure.code, failure.message).joinToString(": "),
+            )
         }
-
-        scope.launch {
-            val added = rootRepository.addRoot(opened)
-            if (added == null) {
-                message = "该目录已在曲库根目录列表中"
-            } else {
-                message = null
-                roots = rootRepository.getRoots()
-            }
-        }
-    }
-
-    fun removeRoot(root: LibraryRootEntity) {
-        if (isScanning) return
-
-        scope.launch {
-            if (rootRepository.removeRoot(root.rootId)) {
-                roots = rootRepository.getRoots()
-                rootErrors.remove(Uri.parse(root.treeUri))
-                message = null
-                refreshDatabaseTracks()
-            }
-        }
-    }
-
-    /** Starts a fresh scan of all configured roots through [LibraryScanPipeline]. */
-    fun rescan() {
-        if (isScanning || roots.isEmpty()) return
-        scanJob = scope.launch { performScan() }
-    }
+    val isScanning get() = managementState.busy || managementState.exporting
+    fun rootErrorFor(root: LibraryRootEntity): String? =
+        errors.firstOrNull { it.isRootError && it.rootUri.toString() == root.treeUri }?.message
+    fun addRoot(uri: Uri?) = management.addRoot(uri?.toString())
+    fun removeRoot(root: LibraryRootEntity) = management.removeRoot(root.rootId)
+    fun rescan() = management.rescan()
 
     /** Refreshes the database tracks list for debug inspection. */
     fun refreshDatabaseTracks() {
@@ -335,96 +266,12 @@ class SafDebugController(context: Context) {
     fun diagnosticFileName(format: DiagnosticExportFormat): String =
         DiagnosticReportFormatter.suggestedFileName(format, System.currentTimeMillis())
 
-    fun exportDiagnostics(uri: Uri?, format: DiagnosticExportFormat) {
-        if (uri == null || isExportingDiagnostics) return
-        scope.launch {
-            isExportingDiagnostics = true
-            diagnosticMessage = null
-            try {
-                withContext(Dispatchers.IO) {
-                    val report = buildDiagnosticReport(
-                        generatedAt = System.currentTimeMillis(),
-                        roots = database.libraryRootDao().getAllByPriority(),
-                        sources = database.sourceDao().getAll(),
-                        latestScan = latestScanReport,
-                        latestScanFailure = latestScanFailure,
-                    )
-                    val content = DiagnosticReportFormatter.format(report, format)
-                    val stream = appContext.contentResolver.openOutputStream(uri, "wt")
-                        ?: error("目标文档无法打开")
-                    stream.bufferedWriter(Charsets.UTF_8).use { writer -> writer.write(content) }
-                }
-                diagnosticMessage = "诊断日志已导出"
-            } catch (e: Exception) {
-                diagnosticMessage = "诊断日志导出失败: ${e.describe()}"
-            } finally {
-                isExportingDiagnostics = false
-            }
-        }
-    }
+    fun exportDiagnostics(uri: Uri?, format: DiagnosticExportFormat) =
+        management.exportDiagnostics(uri?.toString(), format)
 
-    /** Cancels the scan scope when the debug screen leaves composition. */
+    /** Only inspection and playback observation stop; the shared scan continues. */
     fun close() {
         playbackConnection.release()
         scope.cancel()
     }
-
-    private suspend fun performScan() {
-        val currentRoots = roots
-        if (currentRoots.isEmpty()) return
-
-        status = ScanStatus.Scanning
-        totalFileCount = 0
-        candidateCount = 0
-        errorCount = 0
-        elapsedMs = 0
-        message = null
-        candidates.clear()
-        errors.clear()
-        rootErrors.clear()
-        diagnosticMessage = null
-        latestScanReport = null
-        latestScanFailure = null
-
-        val startedAt = SystemClock.elapsedRealtime()
-
-        try {
-            val report = pipeline.executeScan(currentRoots)
-            latestScanReport = report
-            totalFileCount = report.totalFilesDiscovered
-            candidateCount = report.audioCandidatesDiscovered
-            errorCount = report.unavailableDirectories + report.parseFailed
-            cacheHits = report.cacheHits
-            cacheMisses = report.cacheMisses
-            report.directoryFailures.forEach { failure ->
-                val rootUri = Uri.parse(failure.rootUri)
-                val rootLabel = currentRoots.firstOrNull { it.treeUri == failure.rootUri }?.displayPath
-                    ?: failure.rootPath
-                val item = ScanErrorItem(
-                    rootUri = rootUri,
-                    rootLabel = rootLabel,
-                    pathLabel = failure.path,
-                    isRootError = failure.path == failure.rootPath,
-                    message = listOfNotNull(failure.code, failure.message).joinToString(": "),
-                )
-                errors += item
-                if (item.isRootError) rootErrors[rootUri] = item.message
-            }
-
-            status = ScanStatus.Completed
-            roots = rootRepository.getRoots()
-            refreshDatabaseTracks()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            status = ScanStatus.Failed
-            latestScanFailure = e.describe()
-            message = "扫描失败: $latestScanFailure"
-        } finally {
-            elapsedMs = SystemClock.elapsedRealtime() - startedAt
-        }
-    }
 }
-
-private fun Throwable.describe(): String =
-    "${this::class.java.simpleName}: ${message ?: "未知错误"}"

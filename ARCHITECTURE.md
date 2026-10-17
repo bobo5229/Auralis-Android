@@ -39,13 +39,34 @@
 - 顺序播放、列表循环和单曲循环复用 Media3 的重复模式；随机歌曲和随机专辑由 Auralis 生成实际队列顺序，再交给 Media3 播放，不在 Compose 层临时计算下一首。
 - 随机歌曲采用无权重的逐轮洗牌；随机专辑以真实 `AlbumId` 为块洗牌，块内严格按 Disc Number、Track Number 排序，无专辑歌曲各自作为单曲块。
 - 随机轮次播放结束时，由 `AuralisPlaybackService` 生成下一轮顺序。重建队列时保留当前播放语义，避免 UI 与后台服务出现不同步状态。
-- 当前播放模式通过 DataStore 作为轻量偏好持久化；当前歌曲、播放位置和应用退出前的播放状态仍不持久化。
+- 当前播放模式以 Media3 当前队列中的模式元数据为真源，UI 通过 `PlaybackControllerConnection` 观察；后台服务在接受队列模式后串行写入 DataStore，偏好只用于新建队列时的默认模式，UI 不独立写入。当前歌曲、播放位置和应用退出前的播放状态仍不持久化。
 
 ### 2.3 前台播放器状态
 
 - Compose 只通过 `PlaybackControllerConnection` 观察和控制 Media3，不直接持有 ExoPlayer。
 - 迷你播放器收纳状态属于应用会话 UI 状态：跨页面和切歌保留，应用重启后恢复展开，不写入 Room 或 DataStore。
 - Liquid Glass 弹层必须位于被采样的 Backdrop 图层之外，避免弹层递归采样自身造成 RenderThread 崩溃。
+
+### 2.4 UI 文件职责
+
+本轮仅按职责拆文件，保留 `ui.demo` 包名与现有函数名，避免同时扩大调用点迁移范围。
+
+- `AuralisDemoApp` 负责订阅 ViewModel 的曲库与播放状态，并选择加载、欢迎或产品外壳。
+- `DemoNavigationState` 封装跳转与返回，路由和参数直接从 NavController 的返回栈读取，不另存选中页面或专辑；主导航保留原有 saveState / restoreState 行为。
+- `DemoProductShell` 负责 Scaffold、Backdrop、顶栏、播放器收纳和弹层编排；当前歌曲与播放模式仍来自播放连接，收纳状态用 remember，玻璃样式沿用 rememberSaveable。
+- `DemoNavHost` 负责路由到页面的数据与回调连接，不持有播放或滚动状态；路由、缺失内容处理与页面队列构造保持原样。
+- `LibraryPageState` 在导航目的地之外集中保存资料库滚动状态及派生的顶栏标题显隐。专辑、歌曲、流派列表沿用 Compose 的 Saver；流派歌曲列表仍随 genreId 变化重置，不新增每流派独立缓存。
+- `DemoTopBar` 和 `AlbumsLayoutMenu` 负责菜单展示与局部开关；页面仅接收数据和回调，不持有播放服务。
+- `LibraryHomeScreen`、`AlbumsScreen`、`AlbumDetailScreen`、`TracksScreen`、`GenresScreen` 分别承载对应页面；首次使用、加载与占位页放在 `LibraryEntryScreens`。
+- `PlayerScreen` 与 `PlaybackModeSheet` 承载完整播放器和模式选择；`LibraryPresentation` 集中现有显示格式及标题可见性规则。
+- `DemoFloatingDock` 仅编排悬浮导航与播放器收纳、拖拽；`DockNavigation`、`DockMiniPlayer`、`DockPlayerArtwork` 分别负责导航、播放控制行和封面进度绘制，`DockGeometry` 保存可独立测试的几何与手势计算。
+- `GlassSurface`、`AdaptiveScreenCornerRadius` 是播放器与导航共享的视觉能力，不负责路由、播放状态或数据访问。弹层与 Backdrop 的现有图层边界保持不变。
+
+本轮拆分已进入统一验收（2026-10-18）：
+- 298 项 JVM 测试及 Debug / AndroidTest 构建通过；13 项 Find X9 自动测试通过，覆盖专辑布局、管理页生命周期、快照一致性、播放模式，以及实际 NavHost 的详情返回、主导航栈恢复和列表状态对象保留。
+- 本轮真实曲库只读检查被系统回收测试进程中断，未计入通过；上一轮 12 首歌曲读取通过的结果不替代本轮验收。
+- 待连续真机交互验收：实际滚动位置恢复、播放器展开/拖拽收纳、模式弹层、歌词切换与切页播放连续性。外置 `.lrc` 回退仍需样本验收。
+- 手动验收期间系统 InputDispatcher 报告两个注入触点仍按下并拒绝 ADB 点击，取消手势和熄屏唤醒未恢复；尚未确定触点残留来源，不作为应用导航故障结论。用户安排次日人工验收，本次推送不代表完整真机验收通过。
 
 ## 3. 曲库目录与权限
 
@@ -63,6 +84,14 @@
 Auralis 直接扫描用户授权的目录树，并读取音频文件及其元数据。曲库内容的发现、解析、身份判断和可用性状态均以用户授权目录和 Auralis 自己的数据库为基础，而不是以系统媒体库的收录结果为基础。
 
 曲库目录采用递归扫描。单个文件的解析或播放失败不能中断整个扫描任务，扫描应继续处理其他目录和文件，并为失败文件保留诊断信息。
+
+### 3.1 曲库管理与扫描生命周期
+
+- 正式入口使用 `LibraryManagementActivity`，目录管理、手动扫描和诊断导出由应用进程共享的 `LibraryManagementStore` 承载；调试页面只订阅同一状态并调用相同操作。
+- 扫描与页面组合、Activity 实例解耦，返回浏览、打开系统选择器或重建 Activity 不取消扫描；同一进程内扫描与目录增删互斥，重复扫描请求忽略。
+- 扫描不建立常驻后台服务，不保证进程退出后继续运行，也不自动恢复。已提交批次保留，用户再次打开应用后手动重新扫描；扫描完成前不发布完成状态。
+- 扫描状态与最近报告仅保存在内存；目录与曲库仍以 Room 为真源。初始化和操作失败可重试，取消系统选择器不修改目录。
+
 
 ## 4. 本地数据分层
 
@@ -150,6 +179,11 @@ DataStore 只保存轻量设置，例如界面偏好、播放相关选项和其�
 - v1 的 native ABI 只编译 `arm64-v8a`。
 - 该层不引入 Room、播放链路、缓存或 UI 依赖。
 
+### 9.1 封面与歌词的文件访问
+
+- `LibraryAudioSource` 保存音频源位置及文件、扫描版本；`LibraryArtworkSource` 组合音频源与内嵌封面标志，歌词读取只依赖音频源。
+- `library/saf/SafSiblingFiles` 统一同目录定位和子文档查询；封面与歌词各自负责候选优先级、内容解码及错误提示，共享层不决定产品回退规则。
+
 ## 10. 曲库持久化与对账架构（Phase 3B 规范）
 
 ### 10.1 核心分层（Logical Track vs Physical TrackSource）
@@ -161,6 +195,7 @@ Auralis 严格解耦物理连续性与逻辑呈现：
 
 ### 10.2 权威数据库与事务边界
 - Room 作为 Auralis 曲库的权威真源。
+- 浏览快照由相关表失效通知统一触发，在一次事务中读取专辑、曲目、艺术家、活动源和流派，再在事务外生成投影；不得用多个独立查询流拼接跨提交的快照。
 - 扫描发现与 TagLib 抽取完全位于数据库事务外部；数据库持久化采用分批原子事务（100~200 条批量写入），避免长锁与高频 IO 瓶颈。
 - 只有成功扫描的 scope 内部失联源才标记为 `MISSING`；根目录整体故障或单目录不可达（`DirectoryUnavailable`）时保持 `UNREACHABLE`，绝对不误删曲目。
 

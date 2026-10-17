@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.bobo.auralis.mobile.debug.SafRootStore
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import kotlinx.coroutines.runBlocking
 import org.junit.After

@@ -19,6 +19,10 @@ import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import java.io.IOException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.guava.future
 import java.security.SecureRandom
@@ -30,9 +34,21 @@ class AuralisPlaybackService : MediaLibraryService() {
     private data class EvidenceEvent(val evidence: PlaybackSourceEvidence, val error: PlaybackException? = null)
     private lateinit var evidenceWriter: PlaybackEvidenceWriter<EvidenceEvent>
     private val random = SecureRandom()
+    private val confirmedMode = MutableStateFlow<PlaybackMode?>(null)
 
     override fun onCreate() {
         super.onCreate()
+        val preferences = PlaybackPreferencesRepository(this)
+        serviceScope.launch {
+            // Serialize writes; persist only a mode actually accepted by the service.
+            confirmedMode.filterNotNull().collect { mode ->
+                try {
+                    preferences.setPlaybackMode(mode)
+                } catch (error: IOException) {
+                    Log.e("PlaybackMode", "Unable to persist playback mode", error)
+                }
+            }
+        }
         val database = AuralisDatabase.get(this)
         val resolver = PlaybackMediaItemResolver(database)
         val sourceStates = PlaybackSourceStateRepository(database)
@@ -89,7 +105,8 @@ class AuralisPlaybackService : MediaLibraryService() {
     private inner class PlaybackEvidenceListener : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             if (events.contains(Player.EVENT_TIMELINE_CHANGED) || events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
-                val mode = PlaybackMode.fromKey(player.currentMediaItem?.mediaMetadata?.extras?.getString(PlaybackModeMetadata.Mode))
+                val mode = player.currentPlaybackMode()
+                if (player.currentMediaItem != null) confirmedMode.value = mode
                 player.repeatMode = playbackRepeatMode(mode)
                 player.shuffleModeEnabled = false
             }

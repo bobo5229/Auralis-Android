@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.library.browser
 
+import com.bobo.auralis.mobile.library.model.LibraryAudioSource
+
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import com.bobo.auralis.mobile.library.db.dao.ActiveTrackSourceRow
 import com.bobo.auralis.mobile.library.db.dao.AlbumArtistNameRow
@@ -12,24 +14,42 @@ import com.bobo.auralis.mobile.library.model.ParseState
 import com.bobo.auralis.mobile.library.model.PlayabilityState
 import com.bobo.auralis.mobile.library.model.SourceAvailabilityState
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
+import androidx.room.withTransaction
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 
 class LibraryBrowserRepository(database: AuralisDatabase) {
     private val dao = database.libraryBrowserDao()
 
-    private val tracksSnapshot: Flow<LibrarySnapshot> = combine(
-        dao.observeAlbums(),
-        dao.observeTracks(),
-        dao.observeAlbumArtists(),
-        dao.observeTrackArtists(),
-        dao.observeActiveSources(),
-    ) { albums, tracks, albumArtistRows, trackArtistRows, activeRows ->
-        projectLibrarySnapshot(albums, tracks, albumArtistRows, trackArtistRows, activeRows)
-    }
+    // One invalidation trigger, one database snapshot. Independent query flows can
+    // otherwise combine rows from different commits, even when writers are atomic.
+    val snapshot: Flow<LibrarySnapshot> = database.invalidationTracker.createFlow(
+        "album", "track", "album_artist", "track_artist", "artist",
+        "track_active_source", "track_source", "library_root", "source_metadata",
+        "genre", "track_genre",
+    ).map {
+        database.withTransaction {
+            BrowserRows(
+                dao.readAlbums(), dao.readTracks(), dao.readAlbumArtists(),
+                dao.readTrackArtists(), dao.readActiveSources(), dao.readGenres(),
+            )
+        }
+    }.map { rows ->
+        projectGenreSnapshot(
+            projectLibrarySnapshot(rows.albums, rows.tracks, rows.albumArtists, rows.trackArtists, rows.activeSources),
+            rows.genres,
+        )
+    }.flowOn(Dispatchers.Default)
 
-    val snapshot: Flow<LibrarySnapshot> = combine(tracksSnapshot, dao.observeGenres()) { library, genres ->
-        projectGenreSnapshot(library, genres)
-    }
+    private data class BrowserRows(
+        val albums: List<AlbumEntity>,
+        val tracks: List<TrackEntity>,
+        val albumArtists: List<AlbumArtistNameRow>,
+        val trackArtists: List<TrackArtistNameRow>,
+        val activeSources: List<ActiveTrackSourceRow>,
+        val genres: List<TrackGenreNameRow>,
+    )
 }
 
 internal fun projectGenreSnapshot(library: LibrarySnapshot, rows: List<TrackGenreNameRow>): LibrarySnapshot {
@@ -207,15 +227,17 @@ private fun TrackEntity.toLibraryTrack(
         unavailableReason = unavailableReason,
         artworkSource = active?.let {
             LibraryArtworkSource(
-                sourceId = it.sourceId,
-                audioUri = it.uri,
-                treeUri = it.treeUri,
-                relativePath = it.relativePath,
-                fileName = it.fileName,
-                modifiedMs = it.modifiedMs,
-                sizeBytes = it.sizeBytes,
+                audioSource = LibraryAudioSource(
+                    sourceId = it.sourceId,
+                    audioUri = it.uri,
+                    treeUri = it.treeUri,
+                    relativePath = it.relativePath,
+                    fileName = it.fileName,
+                    modifiedMs = it.modifiedMs,
+                    sizeBytes = it.sizeBytes,
+                    rootLastSuccessfulScanAt = it.rootLastSuccessfulScanAt,
+                ),
                 hasEmbeddedArtwork = it.hasEmbeddedArtwork == true,
-                rootLastSuccessfulScanAt = it.rootLastSuccessfulScanAt,
             )
         },
     )

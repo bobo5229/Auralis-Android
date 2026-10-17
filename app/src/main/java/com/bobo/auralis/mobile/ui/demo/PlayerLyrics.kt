@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bobo.auralis.mobile.library.browser.LibraryArtworkSource
+import com.bobo.auralis.mobile.library.model.LibraryAudioSource
 import com.bobo.auralis.mobile.lyrics.Lyrics
 import com.bobo.auralis.mobile.lyrics.LyricsLoader
 import java.io.IOException
@@ -23,7 +23,7 @@ private sealed interface LyricsState {
 }
 
 @Composable
-internal fun PlayerLyrics(source: LibraryArtworkSource?, positionMs: Long, modifier: Modifier = Modifier) {
+internal fun PlayerLyrics(source: LibraryAudioSource?, positionMs: Long, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val loader = remember(context) { LyricsLoader(context) }
     var retry by remember(source) { mutableIntStateOf(0) }

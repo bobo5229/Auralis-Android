@@ -12,7 +12,6 @@ import com.bobo.auralis.mobile.library.model.PlayabilityState
 import com.bobo.auralis.mobile.library.model.SourceAvailabilityState
 import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.TrackSourceId
-import kotlinx.coroutines.flow.Flow
 
 data class TrackGenreNameRow(val genreId: GenreId, val displayName: String, val trackId: TrackId, val position: Int = 0)
 
@@ -57,10 +56,10 @@ interface LibraryBrowserDao {
         ORDER BY track_genre.trackId, track_genre.position
         """,
     )
-    fun observeGenres(): Flow<List<TrackGenreNameRow>>
+    suspend fun readGenres(): List<TrackGenreNameRow>
 
     @Query("SELECT * FROM album ORDER BY title COLLATE NOCASE ASC, date ASC, albumId ASC")
-    fun observeAlbums(): Flow<List<AlbumEntity>>
+    suspend fun readAlbums(): List<AlbumEntity>
 
     @Query(
         """
@@ -68,7 +67,7 @@ interface LibraryBrowserDao {
         ORDER BY albumId ASC, discNumber ASC, trackNumber ASC, title COLLATE NOCASE ASC, trackId ASC
         """,
     )
-    fun observeTracks(): Flow<List<TrackEntity>>
+    suspend fun readTracks(): List<TrackEntity>
 
     @Query(
         """
@@ -78,7 +77,7 @@ interface LibraryBrowserDao {
         ORDER BY aa.albumId ASC, aa.position ASC
         """,
     )
-    fun observeAlbumArtists(): Flow<List<AlbumArtistNameRow>>
+    suspend fun readAlbumArtists(): List<AlbumArtistNameRow>
 
     @Query(
         """
@@ -88,7 +87,7 @@ interface LibraryBrowserDao {
         ORDER BY ta.trackId ASC, ta.position ASC
         """,
     )
-    fun observeTrackArtists(): Flow<List<TrackArtistNameRow>>
+    suspend fun readTrackArtists(): List<TrackArtistNameRow>
 
     @Query(
         """
@@ -103,5 +102,5 @@ interface LibraryBrowserDao {
         LEFT JOIN source_metadata AS metadata ON metadata.sourceId = source.sourceId
         """,
     )
-    fun observeActiveSources(): Flow<List<ActiveTrackSourceRow>>
+    suspend fun readActiveSources(): List<ActiveTrackSourceRow>
 }

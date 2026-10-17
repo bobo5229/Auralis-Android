@@ -17,7 +17,7 @@ import com.bobo.auralis.mobile.library.browser.LibraryArtworkSource
 import com.bobo.auralis.mobile.library.metadata.MetadataExtractor
 import com.bobo.auralis.mobile.library.metadata.MetadataResult
 import com.bobo.auralis.mobile.library.metadata.MetadataTarget
-import com.bobo.auralis.mobile.library.saf.SafLocation
+import com.bobo.auralis.mobile.library.saf.SafSiblingFiles
 import java.io.ByteArrayInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,67 +76,29 @@ internal sealed interface ResolvedArtwork {
 
 internal class LibraryArtworkResolver(context: Context) {
     val contentResolver: ContentResolver = context.contentResolver
+    private val siblings = SafSiblingFiles(contentResolver)
     private val extractor = MetadataExtractor.from(context)
 
     suspend fun resolve(source: LibraryArtworkSource): ResolvedArtwork? = withContext(Dispatchers.IO) {
+        val audio = source.audioSource
         if (source.hasEmbeddedArtwork) {
-            val result = extractor.extract(MetadataTarget(Uri.parse(source.audioUri), source.fileName))
+            val result = extractor.extract(MetadataTarget(Uri.parse(audio.audioUri), audio.fileName))
             val embedded = (result as? MetadataResult.Success)?.metadata?.cover
             if (embedded != null && embedded.isNotEmpty() && isDecodableImage(embedded)) {
                 return@withContext ResolvedArtwork.Embedded(embedded)
             }
         }
 
-        val treeUri = source.treeUri?.let(Uri::parse) ?: return@withContext null
-        val directoryId = resolveDirectoryId(treeUri, siblingDirectorySegments(treeUri, source.relativePath))
+        val treeUri = audio.treeUri?.let(Uri::parse) ?: return@withContext null
+        val directoryId = siblings.directoryId(treeUri, audio.relativePath)
             ?: return@withContext null
         resolveSiblingCover(treeUri, directoryId)
     }
 
-    private fun resolveDirectoryId(treeUri: Uri, segments: List<String>): String? {
-        var directoryId = DocumentsContract.getTreeDocumentId(treeUri)
-        for (segment in segments) {
-            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, directoryId)
-            directoryId = contentResolver.query(
-                childrenUri,
-                DIRECTORY_PROJECTION,
-                null,
-                null,
-                null,
-            )?.use { cursor ->
-                val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-                var match: String? = null
-                while (cursor.moveToNext() && match == null) {
-                    if (cursor.getString(nameIndex) == segment &&
-                        cursor.getString(mimeIndex) == DocumentsContract.Document.MIME_TYPE_DIR
-                    ) {
-                        match = cursor.getString(idIndex)
-                    }
-                }
-                match
-            } ?: return null
-        }
-        return directoryId
-    }
-
     private fun resolveSiblingCover(treeUri: Uri, directoryId: String): ResolvedArtwork.Sibling? {
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, directoryId)
-        val candidates = contentResolver.query(childrenUri, FILE_PROJECTION, null, null, null)?.use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-            val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-            val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-            buildList {
-                while (cursor.moveToNext()) {
-                    val name = cursor.getString(nameIndex)
-                    val mimeType = cursor.getString(mimeIndex)
-                    if (isSupportedImage(name, mimeType)) {
-                        add(CoverCandidate(cursor.getString(idIndex), name, mimeType))
-                    }
-                }
-            }
-        }.orEmpty()
+        val candidates = siblings.children(treeUri, directoryId).orEmpty()
+            .filter { isSupportedImage(it.name, it.mimeType) }
+            .map { CoverCandidate(it.id, it.name, it.mimeType) }
         val chosen = orderCoverCandidates(candidates).firstOrNull { candidate ->
             val uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, candidate.documentId)
             runCatching {
@@ -153,14 +115,6 @@ internal class LibraryArtworkResolver(context: Context) {
         )
     }
 
-    companion object {
-        private val DIRECTORY_PROJECTION = arrayOf(
-            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-            DocumentsContract.Document.COLUMN_MIME_TYPE,
-        )
-        private val FILE_PROJECTION = DIRECTORY_PROJECTION
-    }
 }
 
 internal data class CoverCandidate(val documentId: String, val fileName: String, val mimeType: String?)
@@ -171,16 +125,6 @@ internal fun chooseCoverCandidate(candidates: List<CoverCandidate>): CoverCandid
 internal fun orderCoverCandidates(candidates: List<CoverCandidate>): List<CoverCandidate> =
     candidates.filter { fileStem(it.fileName) == "cover" }.sortedBy { it.fileName } +
         candidates.filter { fileStem(it.fileName) == "COVER" }.sortedBy { it.fileName }
-
-internal fun siblingDirectorySegments(treeUri: Uri, relativePath: String): List<String> {
-    val rootPath = SafLocation.restore(treeUri).path.toString()
-    return siblingDirectorySegments(rootPath, relativePath)
-}
-
-internal fun siblingDirectorySegments(rootPath: String, relativePath: String): List<String> {
-    val belowRoot = relativePath.removePrefix(rootPath).trimStart('/')
-    return belowRoot.split('/').filter { it.isNotEmpty() }.dropLast(1)
-}
 
 private fun fileStem(fileName: String): String = fileName.substringBeforeLast('.', fileName)
 

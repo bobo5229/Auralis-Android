@@ -1,4 +1,4 @@
-package com.bobo.auralis.mobile.debug
+package com.bobo.auralis.mobile.library.saf
 
 import android.content.Context
 import android.content.Intent

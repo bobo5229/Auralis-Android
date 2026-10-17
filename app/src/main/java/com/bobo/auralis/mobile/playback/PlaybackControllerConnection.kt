@@ -30,6 +30,7 @@ data class PlaybackConnectionState(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val error: String? = null,
+    val playbackMode: PlaybackMode = PlaybackMode.Sequential,
 )
 
 /** UI-side MediaController connection; Compose never owns an ExoPlayer instance. */
@@ -152,6 +153,7 @@ internal class PlaybackControllerConnection(context: Context) {
             positionMs = player?.currentPosition?.coerceAtLeast(0) ?: 0,
             durationMs = player?.duration?.takeIf { it > 0 } ?: 0,
             error = error,
+            playbackMode = player?.currentPlaybackMode() ?: PlaybackMode.Sequential,
         )
     }
 

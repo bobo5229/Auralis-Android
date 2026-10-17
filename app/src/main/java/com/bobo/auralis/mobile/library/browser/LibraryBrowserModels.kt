@@ -3,21 +3,14 @@ package com.bobo.auralis.mobile.library.browser
 import com.bobo.auralis.mobile.library.model.AlbumId
 import com.bobo.auralis.mobile.library.model.GenreId
 import com.bobo.auralis.mobile.library.model.TrackId
-import com.bobo.auralis.mobile.library.model.TrackSourceId
+import com.bobo.auralis.mobile.library.model.LibraryAudioSource
 
 data class LibraryArtworkSource(
-    val sourceId: TrackSourceId,
-    val audioUri: String,
-    val treeUri: String?,
-    val relativePath: String,
-    val fileName: String,
-    val modifiedMs: Long,
-    val sizeBytes: Long,
+    val audioSource: LibraryAudioSource,
     val hasEmbeddedArtwork: Boolean,
-    val rootLastSuccessfulScanAt: Long?,
 ) {
     val cacheKey: String
-        get() = "auralis-artwork:$sourceId:$modifiedMs:$sizeBytes:${rootLastSuccessfulScanAt ?: 0L}"
+        get() = "auralis-artwork:${audioSource.sourceId}:${audioSource.modifiedMs}:${audioSource.sizeBytes}:${audioSource.rootLastSuccessfulScanAt ?: 0L}"
 }
 
 data class LibraryTrack(
@@ -34,6 +27,9 @@ data class LibraryTrack(
     val artworkSource: LibraryArtworkSource?,
     val genres: List<String> = emptyList(),
 ) {
+    val audioSource: LibraryAudioSource?
+        get() = artworkSource?.audioSource
+
     val artistLabel: String
         get() = artists.takeIf { it.isNotEmpty() }?.joinToString("；") ?: "未知艺术家"
 }
