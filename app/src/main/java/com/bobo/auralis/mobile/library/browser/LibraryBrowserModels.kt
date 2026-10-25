@@ -24,11 +24,12 @@ data class LibraryTrack(
     val trackNumber: Int?,
     val isPlayable: Boolean,
     val unavailableReason: String?,
-    val artworkSource: LibraryArtworkSource?,
+    val audioSource: LibraryAudioSource?,
+    val hasEmbeddedArtwork: Boolean = false,
     val genres: List<String> = emptyList(),
 ) {
-    val audioSource: LibraryAudioSource?
-        get() = artworkSource?.audioSource
+    val artworkSource: LibraryArtworkSource?
+        get() = audioSource?.let { LibraryArtworkSource(it, hasEmbeddedArtwork) }
 
     val artistLabel: String
         get() = artists.takeIf { it.isNotEmpty() }?.joinToString("；") ?: "未知艺术家"

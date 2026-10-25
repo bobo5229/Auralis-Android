@@ -1,4 +1,6 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.playback.playablePageQueue
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -47,6 +49,3 @@ internal class LibraryViewModel(application: Application) : AndroidViewModel(app
     }
 }
 
-internal fun playablePageQueue(tracks: List<LibraryTrack>): List<PlaybackQueueTrack> = tracks
-    .filter { it.isPlayable }
-    .map { PlaybackQueueTrack(it.trackId, it.albumId?.toString(), it.discNumber, it.trackNumber) }

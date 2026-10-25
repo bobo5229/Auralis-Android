@@ -305,24 +305,28 @@ class LibraryScanPipeline(
             root.rootId to (!failedRootUris.contains(root.treeUri))
         }
 
-        transaction.reconcileMissingSources(
-            scanSessionId = scanSessionId,
-            rootIdToReachable = rootIdToReachable,
-            timestamp = startedAtSystem,
-            unavailableScopes = unavailableScopes,
-        )
-
-        // Update root status
         val completedCount = roots.count { !failedRootUris.contains(it.treeUri) }
-        for (root in roots) {
-            val isSuccess = !failedRootUris.contains(root.treeUri)
-            rootDao.update(
-                root.copy(
-                    availabilityState = if (isSuccess) RootAvailabilityState.AVAILABLE else RootAvailabilityState.UNAVAILABLE,
-                    lastAttemptedScanAt = startedAtSystem,
-                    lastSuccessfulScanAt = if (isSuccess) startedAtSystem else root.lastSuccessfulScanAt,
-                )
+        // Missing-source projection and root completion markers are one commit.
+        // Discovery/extraction and the already committed batches stay outside this transaction.
+        database.withTransaction {
+            transaction.reconcileMissingSources(
+                scanSessionId = scanSessionId,
+                rootIdToReachable = rootIdToReachable,
+                timestamp = startedAtSystem,
+                unavailableScopes = unavailableScopes,
             )
+
+            // Update root status
+            for (root in roots) {
+                val isSuccess = !failedRootUris.contains(root.treeUri)
+                rootDao.update(
+                    root.copy(
+                        availabilityState = if (isSuccess) RootAvailabilityState.AVAILABLE else RootAvailabilityState.UNAVAILABLE,
+                        lastAttemptedScanAt = startedAtSystem,
+                        lastSuccessfulScanAt = if (isSuccess) startedAtSystem else root.lastSuccessfulScanAt,
+                    )
+                )
+            }
         }
 
         val elapsed = SystemClock.elapsedRealtime() - startedAtRealtime

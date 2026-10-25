@@ -1,4 +1,6 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.ui.demo.*
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState

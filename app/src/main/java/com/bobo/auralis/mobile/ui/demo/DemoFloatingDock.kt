@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.ui.demo
 
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
@@ -16,10 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,11 +49,12 @@ internal enum class DockPlayerState { Expanded, Dragging, Collapsing, Collapsed,
 @Composable
 internal fun DemoFloatingDock(
     backdrop: Backdrop,
-    glassStyle: DemoGlassStyle,
+    glassStyle: GlassStyle,
+    liquidGlassBlurDp: Float,
     destinations: List<DemoDestination>,
     selectedRoute: String,
     currentTrack: LibraryTrack?,
-    isPlaying: Boolean,
+    showPauseButton: Boolean,
     positionMs: Long,
     durationMs: Long?,
     isPlayerCollapsed: Boolean,
@@ -66,14 +71,14 @@ internal fun DemoFloatingDock(
     val themeColors = AuralisThemeTokens.colors
     val dockCornerRadius = rememberAdaptiveDockCornerRadius()
     val glassColor = when (glassStyle) {
-        DemoGlassStyle.Liquid -> themeColors.glassLiquidTint
-        DemoGlassStyle.Frosted -> themeColors.glassFrostedTint
+        GlassStyle.Liquid -> themeColors.glassLiquidTint
+        GlassStyle.Frosted -> themeColors.glassFrostedTint
     }
     val transition = remember(currentTrack?.trackId) {
         Animatable(if (isPlayerCollapsed) 1f else 0f)
     }
     var dragDistancePx by remember(currentTrack?.trackId) { mutableStateOf(0f) }
-    var isDragging by remember { mutableStateOf(false) }
+    var isDragging by remember(currentTrack?.trackId) { mutableStateOf(false) }
     var playerBounds by remember { mutableStateOf<Rect?>(null) }
     var navigationBounds by remember { mutableStateOf<Rect?>(null) }
     var fingerPositionInWindow by remember { mutableStateOf<Offset?>(null) }
@@ -82,6 +87,10 @@ internal fun DemoFloatingDock(
     val localDensity = LocalDensity.current
     val haptics = LocalHapticFeedback.current
     val dragOffsetY = remember(currentTrack?.trackId) { Animatable(0f) }
+    val interactionChanged by rememberUpdatedState(onPlayerInteractionActiveChanged)
+    DisposableEffect(currentTrack?.trackId) {
+        onDispose { interactionChanged(false) }
+    }
 
     LaunchedEffect(isPlayerCollapsed, currentTrack?.trackId) {
         transition.animateTo(
@@ -157,8 +166,11 @@ internal fun DemoFloatingDock(
                                                 isFingerOverNavigation = false
                                                 dragDistancePx = 0f
                                                 scope.launch {
-                                                    dragOffsetY.animateTo(0f, spring())
-                                                    onPlayerInteractionActiveChanged(false)
+                                                    try {
+                                                        dragOffsetY.animateTo(0f, spring())
+                                                    } finally {
+                                                        if (!isDragging) interactionChanged(false)
+                                                    }
                                                 }
                                             }
                                         },
@@ -168,8 +180,11 @@ internal fun DemoFloatingDock(
                                             isFingerOverNavigation = false
                                             dragDistancePx = 0f
                                             scope.launch {
-                                                dragOffsetY.animateTo(0f, spring())
-                                                onPlayerInteractionActiveChanged(false)
+                                                try {
+                                                    dragOffsetY.animateTo(0f, spring())
+                                                } finally {
+                                                    if (!isDragging) interactionChanged(false)
+                                                }
                                             }
                                         },
                                         onDrag = { change, amount ->
@@ -205,9 +220,9 @@ internal fun DemoFloatingDock(
                                 }
                             } else Modifier
                         )
-                        .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle),
+                        .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle, liquidGlassBlurDp),
                     track = track,
-                    isPlaying = isPlaying,
+                    showPauseButton = showPauseButton,
                     onToggle = onTogglePlayback,
                     onPrevious = onPrevious,
                     onNext = onNext,
@@ -228,13 +243,14 @@ internal fun DemoFloatingDock(
                 modifier = Modifier.align(Alignment.BottomCenter),
                 backdrop = backdrop,
                 glassStyle = glassStyle,
+                liquidGlassBlurDp = liquidGlassBlurDp,
                 glassColor = glassColor,
                 dockCornerRadius = dockCornerRadius,
                 destinations = destinations,
                 selectedRoute = selectedRoute,
                 centerSlotProgress = if (currentTrack == null) 0f else transition.value,
                 onDestinationSelected = onDestinationSelected,
-                isPlaying = isPlaying,
+                showPauseButton = showPauseButton,
                 onCenterSlotClick = onTogglePlayback,
                 onCenterSlotExpand = onExpandPlayer,
                 onBoundsChanged = { navigationBounds = it },

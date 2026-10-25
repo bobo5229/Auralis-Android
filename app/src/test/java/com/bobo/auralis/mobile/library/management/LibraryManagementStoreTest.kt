@@ -92,10 +92,36 @@ class LibraryManagementStoreTest {
         } finally { owner.cancel() }
     }
 
+    @Test fun completionWaitsForRootRefreshAndRefreshFailureCanRetry() = runBlocking {
+        val owner = CoroutineScope(coroutineContext + SupervisorJob())
+        val ops = FakeOperations().apply { scanGate.complete(Unit) }
+        val store = LibraryManagementStore(owner, ops)
+        try {
+            yield()
+            val gate = CompletableDeferred<Unit>()
+            ops.rootsGate = gate
+            store.rescan(); yield()
+            assertEquals(ScanStatus.Scanning, store.state.value.status)
+            assertNull(store.state.value.report)
+            assertTrue(store.state.value.busy)
+            ops.failRoots = true
+            gate.complete(Unit); yield()
+            assertEquals(ScanStatus.Failed, store.state.value.status)
+            assertNull(store.state.value.report)
+            assertFalse(store.state.value.busy)
+            ops.failRoots = false
+            store.rescan(); yield()
+            assertEquals(ScanStatus.Completed, store.state.value.status)
+            assertNotNull(store.state.value.report)
+        } finally { owner.cancel() }
+    }
+
     private class FakeOperations : LibraryManagementOperations {
         val root = LibraryRootEntity(LibraryRootId.random(), "content://music", "/Music", 0,
             RootAvailabilityState.AVAILABLE, null, null, 0)
         val scanGate = CompletableDeferred<Unit>()
+        var rootsGate: CompletableDeferred<Unit>? = null
+        var failRoots = false
         var failInitialize = false
         var failScan = false
         var scans = 0
@@ -105,7 +131,11 @@ class LibraryManagementStoreTest {
             if (failInitialize) error("load failed")
             return roots()
         }
-        override suspend fun roots() = listOf(root)
+        override suspend fun roots(): List<LibraryRootEntity> {
+            rootsGate?.await()
+            if (failRoots) error("roots refresh failed")
+            return listOf(root)
+        }
         override suspend fun add(uri: String): String? { mutations++; return "duplicate" }
         override suspend fun remove(rootId: LibraryRootId) { mutations++ }
         override suspend fun scan(roots: List<LibraryRootEntity>): ScanSessionReport {

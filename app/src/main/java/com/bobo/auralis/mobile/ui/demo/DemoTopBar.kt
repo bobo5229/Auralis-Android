@@ -1,6 +1,15 @@
 package com.bobo.auralis.mobile.ui.demo
 
-import android.content.Intent
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Slider
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import com.bobo.auralis.mobile.ui.theme.LiquidGlassBlur
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
@@ -20,12 +29,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.bobo.auralis.mobile.ui.library.LibraryManagementActivity
 import com.bobo.auralis.mobile.R
 import com.bobo.auralis.mobile.ui.theme.AuralisThemeMode
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutAnimationStyle
@@ -38,15 +45,17 @@ private val libraryTitleFontFamily = FontFamily(
 @Composable
 internal fun DemoTopBar(
     title: String,
+    onManageLibrary: () -> Unit,
     useLibraryTitleFont: Boolean,
-    glassStyle: DemoGlassStyle,
-    onGlassStyleSelected: (DemoGlassStyle) -> Unit,
+    glassStyle: GlassStyle,
+    onGlassStyleSelected: (GlassStyle) -> Unit,
+    liquidGlassBlurDp: Float,
+    onLiquidGlassBlurDpChanged: (Float) -> Unit,
     themeMode: AuralisThemeMode,
     onThemeModeSelected: (AuralisThemeMode) -> Unit,
     albumLayoutAnimationStyle: AlbumLayoutAnimationStyle,
     onAlbumLayoutAnimationStyleSelected: (AlbumLayoutAnimationStyle) -> Unit,
 ) {
-    val context = LocalContext.current
     var menuExpanded by remember { mutableStateOf(false) }
     TopAppBar(
         title = {
@@ -89,7 +98,7 @@ internal fun DemoTopBar(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
-                DemoGlassStyle.entries.forEach { style ->
+                GlassStyle.entries.forEach { style ->
                     DropdownMenuItem(
                         text = { Text(style.label) },
                         leadingIcon = { if (style == glassStyle) Icon(Icons.Rounded.Check, contentDescription = null) },
@@ -98,6 +107,27 @@ internal fun DemoTopBar(
                             onGlassStyleSelected(style)
                         },
                     )
+                }
+                if (glassStyle == GlassStyle.Liquid) {
+                    Column(Modifier.width(240.dp).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                        val valueLabel = if (liquidGlassBlurDp % 1f == 0f) {
+                            "${liquidGlassBlurDp.toInt()} dp"
+                        } else "$liquidGlassBlurDp dp"
+                        Text("模糊强度 · $valueLabel", style = MaterialTheme.typography.bodyMedium)
+                        Slider(
+                            value = liquidGlassBlurDp,
+                            onValueChange = { dp ->
+                                val normalized = LiquidGlassBlur.normalize(dp)
+                                if (normalized != liquidGlassBlurDp) onLiquidGlassBlurDpChanged(normalized)
+                            },
+                            valueRange = LiquidGlassBlur.MinDp..LiquidGlassBlur.MaxDp,
+                            steps = LiquidGlassBlur.SliderSteps,
+                            modifier = Modifier.fillMaxWidth().semantics {
+                                contentDescription = "Liquid Glass 模糊强度"
+                                stateDescription = valueLabel
+                            },
+                        )
+                    }
                 }
                 Text(
                     text = "专辑布局动效",
@@ -123,7 +153,7 @@ internal fun DemoTopBar(
                     text = { Text("曲库管理") },
                     onClick = {
                         menuExpanded = false
-                        context.startActivity(Intent(context, LibraryManagementActivity::class.java))
+                        onManageLibrary()
                     },
                 )
             }

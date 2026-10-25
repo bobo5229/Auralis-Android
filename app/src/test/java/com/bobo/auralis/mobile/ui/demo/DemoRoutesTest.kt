@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.ui.demo
 
+import com.bobo.auralis.mobile.ui.app.*
+
 import org.junit.Assert.*
 import org.junit.Test
 

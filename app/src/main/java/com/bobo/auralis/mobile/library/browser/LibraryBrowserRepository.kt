@@ -9,6 +9,7 @@ import com.bobo.auralis.mobile.library.db.dao.TrackArtistNameRow
 import com.bobo.auralis.mobile.library.db.dao.TrackGenreNameRow
 import com.bobo.auralis.mobile.library.db.entity.AlbumEntity
 import com.bobo.auralis.mobile.library.db.entity.TrackEntity
+import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.AlbumId
 import com.bobo.auralis.mobile.library.model.ParseState
 import com.bobo.auralis.mobile.library.model.PlayabilityState
@@ -32,12 +33,12 @@ class LibraryBrowserRepository(database: AuralisDatabase) {
         database.withTransaction {
             BrowserRows(
                 dao.readAlbums(), dao.readTracks(), dao.readAlbumArtists(),
-                dao.readTrackArtists(), dao.readActiveSources(), dao.readGenres(),
+                dao.readTrackArtists(), dao.readActiveSources(), dao.readGenres(), dao.readMissingTrackIds().toSet(),
             )
         }
     }.map { rows ->
         projectGenreSnapshot(
-            projectLibrarySnapshot(rows.albums, rows.tracks, rows.albumArtists, rows.trackArtists, rows.activeSources),
+            projectLibrarySnapshot(rows.albums, rows.tracks, rows.albumArtists, rows.trackArtists, rows.activeSources, rows.missingTrackIds),
             rows.genres,
         )
     }.flowOn(Dispatchers.Default)
@@ -49,6 +50,7 @@ class LibraryBrowserRepository(database: AuralisDatabase) {
         val trackArtists: List<TrackArtistNameRow>,
         val activeSources: List<ActiveTrackSourceRow>,
         val genres: List<TrackGenreNameRow>,
+        val missingTrackIds: Set<TrackId>,
     )
 }
 
@@ -93,6 +95,7 @@ internal fun projectLibrarySnapshot(
     albumArtistRows: List<AlbumArtistNameRow>,
     trackArtistRows: List<TrackArtistNameRow>,
     activeRows: List<ActiveTrackSourceRow>,
+    missingTrackIds: Set<TrackId> = emptySet(),
 ): LibrarySnapshot {
     val albumArtists = albumArtistRows.groupBy { it.albumId }
         .mapValues { (_, rows) -> rows.sortedBy { it.position }.map { it.displayName } }
@@ -109,7 +112,7 @@ internal fun projectLibrarySnapshot(
         )
     }
 
-    val projectedTracks = tracks.map { track ->
+    val projectedTracks = tracks.filterNot { it.trackId in missingTrackIds }.map { track ->
         track.toLibraryTrack(
             artists = trackArtists[track.trackId].orEmpty(),
             albumTitle = track.albumId?.let(albumTitles::get),
@@ -118,8 +121,9 @@ internal fun projectLibrarySnapshot(
     }
     val tracksByAlbum = projectedTracks.filter { it.albumId != null }.groupBy { it.albumId }
     return LibrarySnapshot(
-        albums = albums.map { album ->
+        albums = albums.mapNotNull { album ->
             val albumTracks = tracksByAlbum[album.albumId].orEmpty().sortedWith(albumTrackComparator)
+            if (albumTracks.isEmpty()) return@mapNotNull null
             LibraryAlbum(
                 albumId = album.albumId,
                 title = album.title,
@@ -225,20 +229,18 @@ private fun TrackEntity.toLibraryTrack(
         trackNumber = trackNumber,
         isPlayable = unavailableReason == null,
         unavailableReason = unavailableReason,
-        artworkSource = active?.let {
-            LibraryArtworkSource(
-                audioSource = LibraryAudioSource(
-                    sourceId = it.sourceId,
-                    audioUri = it.uri,
-                    treeUri = it.treeUri,
-                    relativePath = it.relativePath,
-                    fileName = it.fileName,
-                    modifiedMs = it.modifiedMs,
-                    sizeBytes = it.sizeBytes,
-                    rootLastSuccessfulScanAt = it.rootLastSuccessfulScanAt,
-                ),
-                hasEmbeddedArtwork = it.hasEmbeddedArtwork == true,
+        audioSource = active?.let {
+            LibraryAudioSource(
+                sourceId = it.sourceId,
+                audioUri = it.uri,
+                treeUri = it.treeUri,
+                relativePath = it.relativePath,
+                fileName = it.fileName,
+                modifiedMs = it.modifiedMs,
+                sizeBytes = it.sizeBytes,
+                rootLastSuccessfulScanAt = it.rootLastSuccessfulScanAt,
             )
         },
+        hasEmbeddedArtwork = active?.hasEmbeddedArtwork == true,
     )
 }

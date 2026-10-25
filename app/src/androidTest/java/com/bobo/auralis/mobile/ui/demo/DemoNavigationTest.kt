@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.ui.demo
 
+import com.bobo.auralis.mobile.ui.app.*
+
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp

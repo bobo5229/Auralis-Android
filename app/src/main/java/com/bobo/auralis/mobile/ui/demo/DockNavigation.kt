@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.ui.demo
 
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
@@ -36,14 +38,15 @@ import com.kyant.backdrop.Backdrop
 @Composable
 internal fun DockNavigationRow(
     backdrop: Backdrop,
-    glassStyle: DemoGlassStyle,
+    glassStyle: GlassStyle,
+    liquidGlassBlurDp: Float,
     glassColor: Color,
     dockCornerRadius: androidx.compose.ui.unit.Dp,
     destinations: List<DemoDestination>,
     selectedRoute: String,
     centerSlotProgress: Float,
     onDestinationSelected: (String) -> Unit,
-    isPlaying: Boolean,
+    showPauseButton: Boolean,
     onCenterSlotClick: () -> Unit,
     onCenterSlotExpand: () -> Unit,
     onBoundsChanged: (Rect) -> Unit,
@@ -56,7 +59,7 @@ internal fun DockNavigationRow(
         modifier = modifier.fillMaxWidth()
             .height(FloatingDockTokens.Height)
             .onGloballyPositioned { onBoundsChanged(it.boundsInWindow()) }
-            .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle).padding(4.dp),
+            .auralisGlass(backdrop, RoundedCornerShape(dockCornerRadius), glassColor, glassStyle, liquidGlassBlurDp).padding(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         destinations.forEachIndexed { index, destination ->
@@ -88,7 +91,7 @@ internal fun DockNavigationRow(
                                         )
                                     }
                                     .semantics {
-                                        contentDescription = if (isPlaying) "暂停，长按向上滑动展开播放器" else "播放，长按向上滑动展开播放器"
+                                        contentDescription = if (showPauseButton) "暂停，长按向上滑动展开播放器" else "播放，长按向上滑动展开播放器"
                                         customActions = listOf(
                                             CustomAccessibilityAction("展开播放器") {
                                                 currentExpand()

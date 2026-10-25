@@ -1,6 +1,7 @@
 package com.bobo.auralis.mobile.ui.theme
 
 import android.content.Context
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -91,6 +92,26 @@ class AppearancePreferencesRepository(context: Context) {
             AlbumLayoutAnimationStyle.fromKey(preferences[AlbumLayoutAnimationStyleKey])
         }
 
+    val glassStyle: Flow<GlassStyle> = dataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { preferences -> GlassStyle.fromKey(preferences[GlassStyleKey]) }
+
+    suspend fun setGlassStyle(style: GlassStyle) {
+        dataStore.edit { preferences -> preferences[GlassStyleKey] = style.key }
+    }
+
+    val liquidGlassBlurDp: Flow<Float> = dataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { preferences -> LiquidGlassBlur.normalize(preferences[LiquidGlassBlurDpKey] ?: LiquidGlassBlur.DefaultDp) }
+
+    suspend fun setLiquidGlassBlurDp(dp: Float) {
+        dataStore.edit { preferences -> preferences[LiquidGlassBlurDpKey] = LiquidGlassBlur.normalize(dp) }
+    }
+
     suspend fun setThemeMode(mode: AuralisThemeMode) {
         dataStore.edit { preferences -> preferences[ThemeModeKey] = mode.key }
     }
@@ -104,6 +125,8 @@ class AppearancePreferencesRepository(context: Context) {
     }
 
     private companion object {
+        val GlassStyleKey = stringPreferencesKey("glass_style")
+        val LiquidGlassBlurDpKey = floatPreferencesKey("liquid_glass_blur_dp")
         val ThemeModeKey = stringPreferencesKey("theme_mode")
         val AlbumLayoutModeKey = stringPreferencesKey("album_layout_mode")
         val AlbumLayoutAnimationStyleKey = stringPreferencesKey("album_layout_animation_style")

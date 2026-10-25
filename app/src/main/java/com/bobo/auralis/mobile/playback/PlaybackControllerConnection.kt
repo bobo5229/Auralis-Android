@@ -7,7 +7,6 @@ import android.os.Looper
 import android.os.Bundle
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -31,6 +30,8 @@ data class PlaybackConnectionState(
     val durationMs: Long = 0,
     val error: String? = null,
     val playbackMode: PlaybackMode = PlaybackMode.Sequential,
+    val showPauseButton: Boolean = isPlaying,
+    val currentTrack: PlaybackTrack? = null,
 )
 
 /** UI-side MediaController connection; Compose never owns an ExoPlayer instance. */
@@ -56,10 +57,6 @@ internal class PlaybackControllerConnection(context: Context) {
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = publish(player)
-
-        override fun onPlayerError(error: PlaybackException) {
-            publish(controller, "${error.errorCodeName}: ${error.message ?: "未知播放错误"}")
-        }
     }
 
     init {
@@ -103,12 +100,14 @@ internal class PlaybackControllerConnection(context: Context) {
         }
         val wasPlaying = activeController.playWhenReady
         val currentPosition = activeController.currentPosition.coerceAtLeast(0L)
-        val candidates = restoreQueueOrder(List(activeController.mediaItemCount) { index ->
+        val mediaItems = List(activeController.mediaItemCount) { index ->
             activeController.getMediaItemAt(index)
-        }.mapNotNull { it.toPlaybackQueueTrack() })
+        }
+        val itemsById = mediaItems.associateBy { it.mediaId }
+        val candidates = restoreQueueOrder(mediaItems.mapNotNull { it.toPlaybackQueueTrack() })
         val queue = buildModePlaybackQueue(currentTrackId, candidates, mode)
         activeController.setMediaItems(
-            queue.tracks.map { it.toMediaItem(mode) },
+            queue.tracks.map { it.toMediaItem(mode, itemsById[it.trackId.toString()]) },
             queue.startIndex,
             currentPosition,
         )
@@ -117,7 +116,7 @@ internal class PlaybackControllerConnection(context: Context) {
     }
 
     fun togglePlayPause() {
-        controller?.let { if (it.isPlaying) it.pause() else it.play() }
+        controller?.togglePlayback()
     }
 
     fun stop() {
@@ -144,19 +143,9 @@ internal class PlaybackControllerConnection(context: Context) {
         controller = null
     }
 
-    private fun publish(player: Player?, error: String? = null) {
-        mutableState.value = PlaybackConnectionState(
-            isConnected = player != null,
-            currentMediaId = player?.currentMediaItem?.mediaId,
-            isPlaying = player?.isPlaying == true,
-            playbackState = player?.playbackState ?: Player.STATE_IDLE,
-            positionMs = player?.currentPosition?.coerceAtLeast(0) ?: 0,
-            durationMs = player?.duration?.takeIf { it > 0 } ?: 0,
-            error = error,
-            playbackMode = player?.currentPlaybackMode() ?: PlaybackMode.Sequential,
-        )
+    private fun publish(player: Player?) {
+        mutableState.value = player?.connectionState() ?: PlaybackConnectionState()
     }
-
 
     private companion object {
         const val POSITION_UPDATE_INTERVAL_MS = 500L
@@ -168,24 +157,30 @@ internal data class PlaybackQueue(
     val startIndex: Int,
 )
 
-internal fun buildPlaybackQueue(selectedTrackId: TrackId, candidateTrackIds: List<TrackId>): PlaybackQueue {
-    return buildModePlaybackQueue(
-        selectedTrackId = selectedTrackId,
-        candidates = candidateTrackIds.map { PlaybackQueueTrack(it, null, null, null) },
-        mode = PlaybackMode.Sequential,
-    )
-}
+internal fun Player.connectionState(): PlaybackConnectionState = PlaybackConnectionState(
+    isConnected = true,
+    currentMediaId = currentMediaItem?.mediaId,
+    isPlaying = isPlaying,
+    playbackState = playbackState,
+    positionMs = currentPosition.coerceAtLeast(0),
+    durationMs = duration.takeIf { it > 0 } ?: 0,
+    error = playerError?.let { "${it.errorCodeName}: ${it.message ?: "未知播放错误"}" },
+    playbackMode = currentPlaybackMode(),
+    showPauseButton = showPauseButton,
+    currentTrack = currentMediaItem?.playbackTrack(),
+)
 
-private fun PlaybackQueueTrack.toMediaItem(mode: PlaybackMode): MediaItem {
-    val extras = Bundle().apply {
+internal fun PlaybackQueueTrack.toMediaItem(mode: PlaybackMode, previous: MediaItem? = null): MediaItem {
+    val extras = Bundle(previous?.mediaMetadata?.extras ?: Bundle()).apply {
         putString(PlaybackModeMetadata.Mode, mode.key)
         albumKey?.let { putString(PlaybackModeMetadata.AlbumKey, it) }
         discNumber?.let { putInt(PlaybackModeMetadata.DiscNumber, it) }
         trackNumber?.let { putInt(PlaybackModeMetadata.TrackNumber, it) }
         queueIndex?.let { putInt(PlaybackModeMetadata.QueueIndex, it) }
     }
-    return MediaItem.Builder()
+    return (previous?.buildUpon() ?: MediaItem.Builder())
         .setMediaId(trackId.toString())
-        .setMediaMetadata(androidx.media3.common.MediaMetadata.Builder().setExtras(extras).build())
+        .setMediaMetadata((previous?.mediaMetadata?.buildUpon() ?: androidx.media3.common.MediaMetadata.Builder())
+            .setExtras(extras).build())
         .build()
 }

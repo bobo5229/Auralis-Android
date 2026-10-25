@@ -1,5 +1,7 @@
 package com.bobo.auralis.mobile.ui.demo
 
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,7 +44,8 @@ internal fun PlaybackModeSheet(
     onDismiss: () -> Unit,
     onModeSelected: (PlaybackMode) -> Unit,
     backdrop: Backdrop,
-    glassStyle: DemoGlassStyle,
+    glassStyle: GlassStyle,
+    liquidGlassBlurDp: Float,
 ) {
     BackHandler(onBack = onDismiss)
     val panelCornerRadius = rememberAdaptiveScreenCornerRadius(
@@ -72,6 +75,7 @@ internal fun PlaybackModeSheet(
                     shape = RoundedCornerShape(panelCornerRadius),
                     surfaceColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
                     glassStyle = glassStyle,
+                    liquidGlassBlurDp = liquidGlassBlurDp,
                 )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },

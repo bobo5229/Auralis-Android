@@ -1,6 +1,7 @@
 package com.bobo.auralis.mobile.library.saf
 
 import android.content.Context
+import android.content.ContextWrapper
 import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -9,6 +10,8 @@ import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -31,7 +34,12 @@ class LibraryRootRepositoryTest {
 
     @Before
     fun setup() {
-        context = ApplicationProvider.getApplicationContext<Context>()
+        // Never clear real app preferences when these tests run on the user's phone.
+        context = object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int) =
+                super.getSharedPreferences("root_repository_test_$name", mode)
+        }
         db = Room.inMemoryDatabaseBuilder(context, AuralisDatabase::class.java)
             .allowMainThreadQueries()
             .build()
@@ -83,6 +91,57 @@ class LibraryRootRepositoryTest {
         val updatedList = repository.getRoots()
         assertEquals(3, updatedList.size)
         assertEquals(2, updatedList[2].priority)
+    }
+
+    @Test
+    fun removingAllMigratedRootsDoesNotImportThemAgain() = runBlocking {
+        val prefs = context.getSharedPreferences("auralis_saf_spike", Context.MODE_PRIVATE)
+        val uri = "content://com.android.externalstorage.documents/tree/primary%3A__migration_test__"
+        prefs.edit().putString("roots", uri).commit()
+        val repository = LibraryRootRepository(context, db)
+        val root = repository.initialize().single()
+        assertFalse(prefs.contains("roots"))
+
+        assertTrue(repository.removeRoot(root.rootId))
+        assertTrue(LibraryRootRepository(context, db).initialize().isEmpty())
+    }
+
+    @Test
+    fun existingRoomRootsRetireStaleLegacyRecords() = runBlocking {
+        val prefs = context.getSharedPreferences("auralis_saf_spike", Context.MODE_PRIVATE)
+        prefs.edit().putString("roots", "content://com.android.externalstorage.documents/tree/primary%3AOld").commit()
+        val repository = LibraryRootRepository(context, db)
+        val root = requireNotNull(repository.addRoot(SafLocation.restore(
+            Uri.parse("content://com.android.externalstorage.documents/tree/primary%3A__room_test__"),
+        )))
+
+        assertEquals(listOf(root), repository.initialize())
+        assertFalse(prefs.contains("roots"))
+        assertTrue(repository.removeRoot(root.rootId))
+        assertTrue(repository.initialize().isEmpty())
+    }
+
+    @Test
+    fun failedMigrationRetainsLegacyRootsForRetry() = runBlocking {
+        val prefs = context.getSharedPreferences("auralis_saf_spike", Context.MODE_PRIVATE)
+        val first = "content://com.android.externalstorage.documents/tree/primary%3AFirst"
+        val second = "content://com.android.externalstorage.documents/tree/primary%3ASecond"
+        prefs.edit().putString("roots", "$first\n$second").commit()
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_second_root BEFORE INSERT ON library_root " +
+                "WHEN NEW.priority = 1 BEGIN SELECT RAISE(ABORT, 'migration failed'); END",
+        )
+        val repository = LibraryRootRepository(context, db)
+        try {
+            repository.initialize()
+            fail("Migration should fail")
+        } catch (_: android.database.sqlite.SQLiteException) {
+            assertEquals(0, db.libraryRootDao().count())
+            assertEquals("$first\n$second", prefs.getString("roots", null))
+        }
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_second_root")
+        assertEquals(listOf(first, second), repository.initialize().map { it.treeUri })
+        assertFalse(prefs.contains("roots"))
     }
 
     @Test

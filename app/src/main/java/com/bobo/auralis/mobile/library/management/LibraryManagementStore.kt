@@ -70,10 +70,10 @@ internal class LibraryManagementStore(
             )
             try {
                 val report = operations.scan(state.value.roots)
+                val roots = operations.roots()
                 mutableState.value = mutableState.value.copy(
-                    report = report, status = ScanStatus.Completed,
+                    roots = roots, report = report, status = ScanStatus.Completed,
                 )
-                mutableState.value = mutableState.value.copy(roots = operations.roots())
             } catch (cancelled: CancellationException) {
                 mutableState.value = mutableState.value.copy(status = ScanStatus.Idle)
                 throw cancelled

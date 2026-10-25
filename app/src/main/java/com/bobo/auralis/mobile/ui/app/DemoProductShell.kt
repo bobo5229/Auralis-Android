@@ -1,4 +1,11 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+
+import com.bobo.auralis.mobile.ui.demo.*
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
+import com.bobo.auralis.mobile.ui.library.LibraryManagementActivity
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
@@ -22,7 +29,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,6 +55,10 @@ internal fun DemoProductShell(
     onSeek: (Long) -> Unit,
     playbackMode: PlaybackMode,
     onPlaybackModeSelected: (PlaybackMode) -> Unit,
+    glassStyle: GlassStyle,
+    onGlassStyleSelected: (GlassStyle) -> Unit,
+    liquidGlassBlurDp: Float,
+    onLiquidGlassBlurDpChanged: (Float) -> Unit,
     themeMode: AuralisThemeMode,
     onThemeModeSelected: (AuralisThemeMode) -> Unit,
     albumLayoutMode: AlbumLayoutMode,
@@ -56,16 +66,22 @@ internal fun DemoProductShell(
     albumLayoutAnimationStyle: AlbumLayoutAnimationStyle,
     onAlbumLayoutAnimationStyleSelected: (AlbumLayoutAnimationStyle) -> Unit,
 ) {
+    val context = LocalContext.current
     val navigation = rememberDemoNavigationState()
     val pages = rememberLibraryPageState(navigation.genreId)
     val currentRoute = navigation.currentRoute
     val currentGenre = library.genres.firstOrNull { it.genreId.toString() == navigation.genreId }
-    var glassStyle by rememberSaveable { mutableStateOf(DemoGlassStyle.Liquid) }
+    // Preview hides delayed persistence emissions while the slider is moving.
+    var blurPreviewDp by remember { mutableStateOf<Float?>(null) }
+    LaunchedEffect(liquidGlassBlurDp) {
+        if (blurPreviewDp == liquidGlassBlurDp) blurPreviewDp = null
+    }
+    val effectiveBlurDp = blurPreviewDp ?: liquidGlassBlurDp
     var isPlayerCollapsed by remember { mutableStateOf(false) }
     var isPlayerDragActive by remember { mutableStateOf(false) }
     var showPlaybackModeSheet by remember { mutableStateOf(false) }
 
-    val currentTrack = library.tracks.firstOrNull { it.trackId.toString() == playback.currentMediaId }
+    val currentTrack = playback.currentTrack?.toPlayerTrack()
     val isMainDestination = navigation.isMainDestination
     val isPlayer = navigation.isPlayer
     LaunchedEffect(isPlayer) {
@@ -98,10 +114,16 @@ internal fun DemoProductShell(
             topBar = {
                 when {
                     isMainDestination -> DemoTopBar(
+                        onManageLibrary = { context.startActivity(Intent(context, LibraryManagementActivity::class.java)) },
                         title = mainDestinations.first { it.route == currentRoute }.label,
                         useLibraryTitleFont = currentRoute == "library",
                         glassStyle = glassStyle,
-                        onGlassStyleSelected = { glassStyle = it },
+                        onGlassStyleSelected = onGlassStyleSelected,
+                        liquidGlassBlurDp = effectiveBlurDp,
+                        onLiquidGlassBlurDpChanged = { dp ->
+                            blurPreviewDp = dp
+                            onLiquidGlassBlurDpChanged(dp)
+                        },
                         themeMode = themeMode,
                         onThemeModeSelected = onThemeModeSelected,
                         albumLayoutAnimationStyle = albumLayoutAnimationStyle,
@@ -172,10 +194,11 @@ internal fun DemoProductShell(
             DemoFloatingDock(
                 backdrop = backdrop,
                 glassStyle = glassStyle,
+                liquidGlassBlurDp = effectiveBlurDp,
                 destinations = mainDestinations,
                 selectedRoute = navigation.selectedDockRoute,
                 currentTrack = currentTrack,
-                isPlaying = playback.isPlaying,
+                showPauseButton = playback.showPauseButton,
                 positionMs = playback.positionMs,
                 durationMs = playback.durationMs.takeIf { it > 0 } ?: currentTrack?.durationMs,
                 isPlayerCollapsed = isPlayerCollapsed,
@@ -200,6 +223,7 @@ internal fun DemoProductShell(
                 },
                 backdrop = backdrop,
                 glassStyle = glassStyle,
+                liquidGlassBlurDp = effectiveBlurDp,
             )
         }
     }

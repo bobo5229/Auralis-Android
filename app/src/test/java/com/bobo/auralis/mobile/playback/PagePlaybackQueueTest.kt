@@ -3,7 +3,6 @@ package com.bobo.auralis.mobile.playback
 import com.bobo.auralis.mobile.library.browser.LibraryTrack
 import com.bobo.auralis.mobile.library.model.AlbumId
 import com.bobo.auralis.mobile.library.model.TrackId
-import com.bobo.auralis.mobile.ui.demo.playablePageQueue
 import org.junit.Assert.*
 import org.junit.Test
 import java.util.Random

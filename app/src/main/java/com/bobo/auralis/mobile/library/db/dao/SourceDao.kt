@@ -10,6 +10,7 @@ import com.bobo.auralis.mobile.library.db.entity.TrackActiveSourceEntity
 import com.bobo.auralis.mobile.library.db.entity.TrackSourceEntity
 import com.bobo.auralis.mobile.library.model.TrackId
 import com.bobo.auralis.mobile.library.model.TrackSourceId
+import com.bobo.auralis.mobile.library.model.LibraryRootId
 
 /**
  * Data access for physical sources, their metadata snapshots and the active
@@ -39,6 +40,9 @@ interface SourceDao {
 
     @Query("SELECT * FROM track_source WHERE trackId = :trackId")
     suspend fun findByTrack(trackId: TrackId): List<TrackSourceEntity>
+
+    @Query("SELECT * FROM track_source WHERE rootId = :rootId")
+    suspend fun findByRoot(rootId: LibraryRootId): List<TrackSourceEntity>
 
     @Query("SELECT * FROM track_source ORDER BY relativePath ASC")
     suspend fun getAll(): List<TrackSourceEntity>

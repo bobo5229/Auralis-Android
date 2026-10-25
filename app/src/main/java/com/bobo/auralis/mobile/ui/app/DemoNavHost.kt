@@ -1,4 +1,6 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.ui.demo.*
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -113,6 +115,7 @@ internal fun DemoNavHost(
                     album = track.albumId?.toString()?.let(albumsById::get),
                     track = track,
                     isPlaying = playback.isPlaying,
+                    showPauseButton = playback.showPauseButton,
                     positionMs = playback.positionMs,
                     durationMs = playback.durationMs.takeIf { it > 0 } ?: track.durationMs,
                     onBack = navigation::back,

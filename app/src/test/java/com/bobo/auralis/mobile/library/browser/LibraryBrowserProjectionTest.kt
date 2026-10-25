@@ -2,6 +2,8 @@ package com.bobo.auralis.mobile.library.browser
 
 import com.bobo.auralis.mobile.library.db.dao.ActiveTrackSourceRow
 import com.bobo.auralis.mobile.library.db.dao.AlbumArtistNameRow
+import com.bobo.auralis.mobile.library.db.dao.TrackGenreNameRow
+import com.bobo.auralis.mobile.library.model.GenreId
 import com.bobo.auralis.mobile.library.db.dao.TrackArtistNameRow
 import com.bobo.auralis.mobile.library.db.entity.AlbumEntity
 import com.bobo.auralis.mobile.library.db.entity.TrackEntity
@@ -19,6 +21,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LibraryBrowserProjectionTest {
+    @Test fun audioSourceIsIndependentAndArtworkFollowsCopiedSource() {
+        val entity = track(AlbumId.random(), title = "Audio only")
+        val row = active(entity.trackId, hasEmbeddedArtwork = false)
+        val projected = projectLibrarySnapshot(emptyList(), listOf(entity), emptyList(), emptyList(), listOf(row)).tracks.single()
+        val audio = requireNotNull(projected.audioSource)
+        assertEquals(row.uri, audio.audioUri)
+        assertEquals(audio, projected.artworkSource?.audioSource)
+        assertFalse(projected.artworkSource!!.hasEmbeddedArtwork)
+        val replacement = audio.copy(audioUri = "content://replacement", modifiedMs = audio.modifiedMs + 1)
+        val copied = projected.copy(audioSource = replacement, hasEmbeddedArtwork = true)
+        assertEquals(replacement, copied.artworkSource?.audioSource)
+        assertTrue(copied.artworkSource!!.hasEmbeddedArtwork)
+        org.junit.Assert.assertNotEquals(projected.artworkSource!!.cacheKey, copied.artworkSource!!.cacheKey)
+        org.junit.Assert.assertNull(projected.copy(audioSource = null).artworkSource)
+    }
+
     @Test
     fun `same-title releases stay separate and album artist never falls back to track artist`() {
         val firstAlbum = album("Shared", "2024-01-01")
@@ -146,6 +164,49 @@ class LibraryBrowserProjectionTest {
         assertEquals("chenyixun", pinyinAlphabeticalSortKey("陈奕迅"))
         assertEquals("chenyixun", pinyinAlphabeticalSortKey("陳奕迅"))
         assertEquals("beyonce", pinyinAlphabeticalSortKey("Beyoncé"))
+    }
+
+    @Test fun missingTracksDisappearFromSongsAlbumsAndGenresWithoutChangingInput() {
+        val keptAlbum = album("Shared", "2024-01-01")
+        val goneAlbum = album("Shared", "2025-01-01")
+        val kept = track(keptAlbum.albumId, "Kept", disc = 2, number = 3)
+        val goneSibling = track(keptAlbum.albumId, "Gone sibling")
+        val goneRelease = track(goneAlbum.albumId, "Gone release")
+        val orphan = track(goneAlbum.albumId, "No album").copy(albumId = null)
+        val entities = listOf(kept, goneSibling, goneRelease, orphan)
+        val sharedGenre = GenreId.random()
+        val goneGenre = GenreId.random()
+        val rows = listOf(
+            TrackGenreNameRow(sharedGenre, "Shared genre", kept.trackId),
+            TrackGenreNameRow(sharedGenre, "Shared genre", goneSibling.trackId),
+            TrackGenreNameRow(goneGenre, "Gone genre", goneRelease.trackId),
+        )
+        val snapshot = projectGenreSnapshot(projectLibrarySnapshot(
+            listOf(keptAlbum, goneAlbum), entities, emptyList(), emptyList(), listOf(active(kept.trackId)),
+            setOf(goneSibling.trackId, goneRelease.trackId, orphan.trackId),
+        ), rows)
+        assertEquals(listOf(kept.trackId), snapshot.tracks.map { it.trackId })
+        assertEquals(listOf(keptAlbum.albumId), snapshot.albums.map { it.albumId })
+        assertEquals(snapshot.tracks, snapshot.albums.single().tracks)
+        assertEquals(2, snapshot.tracks.single().discNumber)
+        assertEquals(3, snapshot.tracks.single().trackNumber)
+        assertEquals(listOf(sharedGenre), snapshot.genres.map { it.genreId })
+        assertEquals(snapshot.tracks, snapshot.genres.single().tracks)
+        assertEquals(4, entities.size)
+    }
+
+    @Test fun allMissingProducesEmptyBrowserAndRecoveredTrackKeepsItsIdentity() {
+        val release = album("Recoverable", null)
+        val entity = track(release.albumId, "Recoverable")
+        fun snapshot(missing: Set<TrackId>) = projectLibrarySnapshot(
+            listOf(release), listOf(entity), emptyList(), emptyList(), listOf(active(entity.trackId)), missing,
+        )
+        val hidden = snapshot(setOf(entity.trackId))
+        assertTrue(hidden.tracks.isEmpty())
+        assertTrue(hidden.albums.isEmpty())
+        val restored = snapshot(emptySet())
+        assertEquals(entity.trackId, restored.tracks.single().trackId)
+        assertEquals(release.albumId, restored.albums.single().albumId)
     }
 
     private fun album(title: String, date: String?) = AlbumEntity(

@@ -56,11 +56,10 @@ Android 无法提供完整效果时，Auralis 仍绘制半透明表面、边界�
 
 Auralis 保留两套使用同一 Backdrop 渲染链路的参数预设：
 
-- `Liquid Glass`（默认）：低模糊、低表面遮罩、较强折射，开启 depth effect 与克制的 chromatic aberration；
+- `Liquid Glass`（默认）：模糊强度 0–5dp、步长 0.5dp、默认 1dp，顶部菜单 Slider 实时调整并保存到 DataStore；低表面遮罩、较强折射，开启 depth effect 与克制的 chromatic aberration；
 - `磨砂玻璃`：保留首轮真机验收通过的高模糊、高表面遮罩与较弱折射参数。
 
-Demo 阶段通过顶部菜单切换并使用可保存的 Compose 页面状态；正式产品阶段迁移为 DataStore
-界面偏好。两种模式共用布局、点击区域与播放状态，不维护两套组件实现。
+顶部菜单的风格选择已接入外观 DataStore，使用稳定的 liquid / frosted 键，重启后恢复；未保存或未知值默认 Liquid Glass。两种模式共用布局、点击区域与播放状态，不维护两套组件实现。
 
 ## QWEA0 实现的定向审计
 

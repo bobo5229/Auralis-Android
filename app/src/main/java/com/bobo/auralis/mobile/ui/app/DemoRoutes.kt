@@ -1,4 +1,6 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.ui.demo.*
 
 internal fun isMainRoute(route: String): Boolean = mainDestinations.any { it.route == route }
 

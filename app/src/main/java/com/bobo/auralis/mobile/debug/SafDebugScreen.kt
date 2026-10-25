@@ -336,7 +336,7 @@ fun SafDebugScreen(modifier: Modifier = Modifier) {
                     TrackInspectionCard(
                         item = item,
                         currentMediaId = controller.playback.currentMediaId,
-                        isPlaying = controller.playback.isPlaying,
+                        showPauseButton = controller.playback.showPauseButton,
                         isConnected = controller.playback.isConnected,
                         onPlayOrToggle = { controller.playOrToggle(item) },
                     )
@@ -502,7 +502,7 @@ private fun AlbumTrackRow(item: TrackInspectionItem) {
 private fun TrackInspectionCard(
     item: TrackInspectionItem,
     currentMediaId: String?,
-    isPlaying: Boolean,
+    showPauseButton: Boolean,
     isConnected: Boolean,
     onPlayOrToggle: () -> Unit,
 ) {
@@ -544,7 +544,7 @@ private fun TrackInspectionCard(
             ) {
                 Text(
                     when {
-                        isCurrent && isPlaying -> "暂停"
+                        isCurrent && showPauseButton -> "暂停"
                         isCurrent -> "继续播放"
                         else -> "播放 Active Source"
                     },

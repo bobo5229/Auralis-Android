@@ -3,11 +3,14 @@ package com.bobo.auralis.mobile.library.saf
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.room.withTransaction
 import com.bobo.auralis.mobile.library.db.AuralisDatabase
 import com.bobo.auralis.mobile.library.db.entity.LibraryRootEntity
 import com.bobo.auralis.mobile.library.db.entity.RootAvailabilityState
 import com.bobo.auralis.mobile.library.model.LibraryRootId
+import com.bobo.auralis.mobile.library.model.SourceAvailabilityState
+import com.bobo.auralis.mobile.library.reconciliation.RoomReconciliationTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -23,6 +26,9 @@ import kotlinx.coroutines.withContext
 class LibraryRootRepository(
     private val context: Context,
     private val database: AuralisDatabase,
+    private val canReadDocument: (Uri, String) -> Boolean = { uri, documentId ->
+        context.applicationContext.contentResolver.canReadDocument(uri, documentId)
+    },
 ) {
     private val appContext = context.applicationContext
     private val rootDao = database.libraryRootDao()
@@ -32,11 +38,17 @@ class LibraryRootRepository(
      * if the Room table is empty and legacy preferences exist.
      */
     suspend fun initialize(): List<LibraryRootEntity> = withContext(Dispatchers.IO) {
-        val existingCount = rootDao.count()
-        if (existingCount == 0) {
-            migrateFromLegacySpikeStore()
+        val legacyStore = SafRootStore(appContext)
+        val roots = database.withTransaction {
+            if (rootDao.count() == 0) {
+                migrateFromLegacySpikeStore(legacyStore)
+            }
+            rootDao.getAllByPriority()
         }
-        rootDao.getAllByPriority()
+        // Clear only after Room commits. Also retire leftovers from older app versions
+        // whose Room roots already exist, so removing the last root stays permanent.
+        legacyStore.clearMigratedRoots()
+        roots
     }
 
     /**
@@ -82,14 +94,49 @@ class LibraryRootRepository(
      * Removes a root by its [LibraryRootId].
      *
      * Releases persisted URI permissions if no other root uses the same URI.
-     * Sources under this root become detached / missing according to §21 rather than cascade-deleted.
+     * Retains source/track identities, rebinds verified overlapping trees, and invalidates lost access.
      */
     suspend fun removeRoot(rootId: LibraryRootId): Boolean = withContext(Dispatchers.IO) {
         val entity = rootDao.findById(rootId) ?: return@withContext false
-
-        database.withTransaction {
-            rootDao.delete(rootId)
+        val sourceDao = database.sourceDao()
+        val remainingRoots = rootDao.getAllByPriority().filterNot { it.rootId == rootId }
+        // Provider queries stay outside the Room transaction. Only verified access can be rebound.
+        val replacements = sourceDao.findByRoot(rootId).associate { source ->
+            val replacement = remainingRoots.firstNotNullOfOrNull { root ->
+                val tree = Uri.parse(root.treeUri)
+                val treeId = runCatching { DocumentsContract.getTreeDocumentId(tree) }.getOrNull()
+                if (tree.authority != source.provider || treeId == null ||
+                    !treeContainsDocument(treeId, source.documentId)
+                ) return@firstNotNullOfOrNull null
+                val uri = DocumentsContract.buildDocumentUriUsingTree(tree, source.documentId)
+                val accessible = canReadDocument(uri, source.documentId)
+                if (accessible) root.rootId to uri.toString() else null
+            }
+            source.sourceId to replacement
         }
+
+        val removed = database.withTransaction {
+            if (rootDao.findById(rootId) == null) return@withTransaction false
+            val sources = sourceDao.findByRoot(rootId)
+            rootDao.delete(rootId)
+            val retainedRootIds = rootDao.getAllByPriority().map { it.rootId }.toSet()
+            for (source in sources) {
+                val replacement = replacements[source.sourceId]?.takeIf { it.first in retainedRootIds }
+                sourceDao.update(source.copy(
+                    rootId = replacement?.first,
+                    uri = replacement?.second ?: source.uri,
+                    availabilityState = if (replacement != null || source.availabilityState == SourceAvailabilityState.MISSING) {
+                        source.availabilityState
+                    } else SourceAvailabilityState.UNREACHABLE,
+                ))
+            }
+            val reconciliation = RoomReconciliationTransaction(database)
+            for (trackId in sources.map { it.trackId }.distinct()) {
+                reconciliation.refreshActiveSourceForTrack(trackId)
+            }
+            true
+        }
+        if (!removed) return@withContext false
 
         // Check if any other root still references this tree URI
         val remainingSameUri = rootDao.findByTreeUri(entity.treeUri)
@@ -99,10 +146,9 @@ class LibraryRootRepository(
         true
     }
 
-    private suspend fun migrateFromLegacySpikeStore() = database.withTransaction {
-        val legacyStore = SafRootStore(appContext)
+    private suspend fun migrateFromLegacySpikeStore(legacyStore: SafRootStore) {
         val legacyRoots = legacyStore.load()
-        if (legacyRoots.isEmpty()) return@withTransaction
+        if (legacyRoots.isEmpty()) return
 
         val now = System.currentTimeMillis()
         legacyRoots.forEachIndexed { index, opened ->

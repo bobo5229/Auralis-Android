@@ -1,4 +1,6 @@
-package com.bobo.auralis.mobile.ui.demo
+package com.bobo.auralis.mobile.ui.app
+
+import com.bobo.auralis.mobile.ui.demo.*
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Explore
@@ -7,15 +9,8 @@ import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-
-internal data class DemoDestination(
-    val route: String,
-    val label: String,
-    val icon: ImageVector,
-)
 
 internal val mainDestinations = listOf(
     DemoDestination("home", "首页", Icons.Rounded.Home),

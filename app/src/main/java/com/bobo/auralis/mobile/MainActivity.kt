@@ -11,7 +11,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.bobo.auralis.mobile.ui.demo.AuralisDemoApp
+import com.bobo.auralis.mobile.ui.app.AuralisDemoApp
+import com.bobo.auralis.mobile.ui.theme.GlassStyle
+import com.bobo.auralis.mobile.ui.theme.LiquidGlassBlur
 import com.bobo.auralis.mobile.ui.theme.AppearancePreferencesRepository
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutAnimationStyle
 import com.bobo.auralis.mobile.ui.theme.AlbumLayoutMode
@@ -37,6 +39,12 @@ class MainActivity : ComponentActivity() {
             )
             val albumLayoutAnimationStyle by appearancePreferences.albumLayoutAnimationStyle
                 .collectAsStateWithLifecycle(initialValue = AlbumLayoutAnimationStyle.Fade)
+            val glassStyle by appearancePreferences.glassStyle.collectAsStateWithLifecycle(
+                initialValue = GlassStyle.Liquid,
+            )
+            val liquidGlassBlurDp by appearancePreferences.liquidGlassBlurDp.collectAsStateWithLifecycle(
+                initialValue = LiquidGlassBlur.DefaultDp,
+            )
             val coroutineScope = rememberCoroutineScope()
             val useDarkColors = themeMode.usesDarkColors(isSystemInDarkTheme())
             val view = LocalView.current
@@ -48,6 +56,14 @@ class MainActivity : ComponentActivity() {
             }
             AuralisTheme(themeMode = themeMode) {
                 AuralisDemoApp(
+                    glassStyle = glassStyle,
+                    onGlassStyleSelected = { style ->
+                        coroutineScope.launch { appearancePreferences.setGlassStyle(style) }
+                    },
+                    liquidGlassBlurDp = liquidGlassBlurDp,
+                    onLiquidGlassBlurDpChanged = { dp ->
+                        coroutineScope.launch { appearancePreferences.setLiquidGlassBlurDp(dp) }
+                    },
                     themeMode = themeMode,
                     albumLayoutMode = albumLayoutMode,
                     albumLayoutAnimationStyle = albumLayoutAnimationStyle,

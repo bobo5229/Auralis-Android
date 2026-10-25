@@ -120,7 +120,7 @@ class AlbumReflowStressTest {
             LibraryAlbum(
                 id, "专辑 $index · A longer album title 流年与四季",
                 listOf("Artist ${index % 97}", "演奏者 ${index % 31}"), "2026-09-18",
-                List(10) { track -> LibraryTrack(TrackId(UUID(1, index * 10L + track)), id, "曲目 $track", listOf("Artist ${index % 97}"), "专辑 $index", 180_000, 1, track + 1, true, null, source) },
+                List(10) { track -> LibraryTrack(TrackId(UUID(1, index * 10L + track)), id, "曲目 $track", listOf("Artist ${index % 97}"), "专辑 $index", 180_000, 1, track + 1, true, null, source?.audioSource, source?.hasEmbeddedArtwork == true) },
                 source,
             )
         }

@@ -111,11 +111,11 @@ private fun randomizedAlbumBlocks(
     Collections.shuffle(remainingKeys, random)
     val orderedKeys = listOfNotNull(leadingAlbumKey?.takeIf(groups::containsKey)) + remainingKeys
     return orderedKeys.flatMap { key ->
+        // Stable sorting preserves input order for equal or missing positions.
         groups.getValue(key).sortedWith(
             compareBy<PlaybackQueueTrack>(
                 { it.discNumber ?: Int.MAX_VALUE },
                 { it.trackNumber ?: Int.MAX_VALUE },
-                { tracks.indexOf(it) },
             ),
         )
     }

@@ -233,7 +233,7 @@ class LibraryScanPipelineTest {
         val earlier = addRoot(0)
         val later = addRoot(1, "Music%2FAlbum")
         scanEvents(listOf(earlier, later), listOf(file(later, "song.flac", "same"), file(earlier, "song.flac", "same")), 1L) {
-            if (it.uri.toString().startsWith(earlier.treeUri)) throw SecurityException("denied")
+            if (it.uri.toString().startsWith(earlier.treeUri + "/document/")) throw SecurityException("denied")
             metadata()
         }
         val source = db.sourceDao().findByDocumentKey("test", "same")!!
@@ -254,4 +254,56 @@ class LibraryScanPipelineTest {
         val backup = db.sourceDao().findByDocumentKey("test", "B.flac")!!
         assertEquals(backup.sourceId, db.sourceDao().findActiveSource(active.trackId)?.sourceId)
     }
+    @Test fun failedFinalizationRollsBackMissingStateButKeepsCommittedObservations() = runBlocking {
+        val first = addRoot(0)
+        val second = addRoot(1, "Other")
+        scanEvents(listOf(first, second), listOf(file(first, "old.flac")), 1L)
+        db.openHelper.writableDatabase.execSQL("UPDATE library_root SET lastSuccessfulScanAt = 1")
+        val roots = db.libraryRootDao().getAllByPriority()
+        // Fail the second completion update, after missing-source reconciliation and the first root update.
+        db.openHelper.writableDatabase.execSQL("""
+            CREATE TRIGGER fail_completion BEFORE UPDATE ON library_root
+            WHEN NEW.priority = 1 AND NEW.lastSuccessfulScanAt IS NOT OLD.lastSuccessfulScanAt
+            BEGIN SELECT RAISE(ABORT, 'completion fault'); END
+        """.trimIndent())
+        try {
+            scanEvents(roots, listOf(file(first, "new.flac")), 2L)
+            org.junit.Assert.fail("Expected completion fault")
+        } catch (expected: android.database.sqlite.SQLiteException) {
+            org.junit.Assert.assertTrue(expected.message.orEmpty().contains("completion fault"))
+        }
+        assertEquals(SourceAvailabilityState.AVAILABLE,
+            db.sourceDao().findByDocumentKey("test", "old.flac")!!.availabilityState)
+        org.junit.Assert.assertNotNull(db.sourceDao().findByDocumentKey("test", "new.flac"))
+        assertEquals(roots.map { it.lastSuccessfulScanAt }, db.libraryRootDao().getAllByPriority().map { it.lastSuccessfulScanAt })
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_completion")
+        scanEvents(db.libraryRootDao().getAllByPriority(), listOf(file(first, "new.flac")), 3L)
+        assertEquals(SourceAvailabilityState.MISSING,
+            db.sourceDao().findByDocumentKey("test", "old.flac")!!.availabilityState)
+    }
+
+    @Test fun cancellationRetainsCommittedBatchWithoutFinalizingMissingSources() = runBlocking {
+        val root = addRoot(0)
+        scanEvents(listOf(root), listOf(file(root, "old.flac")), 1L)
+        val roots = db.libraryRootDao().getAllByPriority()
+        val pipeline = LibraryScanPipeline(
+            ApplicationProvider.getApplicationContext(), db,
+            extractor = object : MetadataExtractor {
+                override suspend fun extract(target: MetadataTarget) = metadata(target.fileName)
+            },
+            scan = { kotlinx.coroutines.flow.flow {
+                repeat(150) { emit(file(root, "new$it.flac")) }
+                throw kotlinx.coroutines.CancellationException("interrupted scan")
+            } },
+        )
+        try {
+            pipeline.executeScan(roots, 2L)
+            org.junit.Assert.fail("Expected cancellation")
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        assertEquals(151, db.sourceDao().getAll().size)
+        assertEquals(SourceAvailabilityState.AVAILABLE,
+            db.sourceDao().findByDocumentKey("test", "old.flac")!!.availabilityState)
+        assertEquals(roots.single().lastSuccessfulScanAt, db.libraryRootDao().getAllByPriority().single().lastSuccessfulScanAt)
+    }
+
 }

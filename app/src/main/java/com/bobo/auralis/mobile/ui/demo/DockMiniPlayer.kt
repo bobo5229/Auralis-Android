@@ -27,7 +27,7 @@ import com.bobo.auralis.mobile.library.browser.LibraryTrack
 @Composable
 internal fun GlassMiniPlayer(
     track: LibraryTrack,
-    isPlaying: Boolean,
+    showPauseButton: Boolean,
     onToggle: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -67,8 +67,8 @@ internal fun GlassMiniPlayer(
         }
         IconButton(onClick = onToggle, enabled = enabled) {
             Icon(
-                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (isPlaying) "暂停" else "播放",
+                if (showPauseButton) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                contentDescription = if (showPauseButton) "暂停" else "播放",
                 tint = MaterialTheme.colorScheme.onSurface,
             )
         }

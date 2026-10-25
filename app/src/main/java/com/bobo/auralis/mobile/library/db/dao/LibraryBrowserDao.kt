@@ -58,6 +58,20 @@ interface LibraryBrowserDao {
     )
     suspend fun readGenres(): List<TrackGenreNameRow>
 
+    /** Keep tombstones in Room, but hide tracks whose physical sources are all missing. */
+    @Query(
+        """
+        SELECT DISTINCT missing.trackId FROM track_source AS missing
+        WHERE missing.availabilityState = 'MISSING'
+          AND NOT EXISTS (
+              SELECT 1 FROM track_source AS remaining
+              WHERE remaining.trackId = missing.trackId
+                AND remaining.availabilityState != 'MISSING'
+          )
+        """,
+    )
+    suspend fun readMissingTrackIds(): List<TrackId>
+
     @Query("SELECT * FROM album ORDER BY title COLLATE NOCASE ASC, date ASC, albumId ASC")
     suspend fun readAlbums(): List<AlbumEntity>
 

@@ -32,6 +32,7 @@
 - 用户从歌曲页或专辑详情点播歌曲时，界面层先按当前页面已确定的排序生成完整可播放曲目列表，再一次性交给 Media3 建立队列，并以所点歌曲作为起始项。
 - 队列、当前项目、播放进度和上一首／下一首能力均以 Media3 播放器为真源；应用内迷你播放器、完整播放器、通知栏、锁屏和系统媒体入口不得各自维护另一套上下首逻辑。
 - `PlaybackMediaItemResolver` 在解析实际播放 URI 时必须保留队列和播放模式所需的 `MediaItem` 元数据，不能因替换媒体源而丢失业务标识。
+- 播放解析在一次 Room 事务中读取曲目、活动源及展示元数据，并检查音源所属 TrackId；事务内不访问 SAF 或读取音频文件。
 
 ### 2.2 播放模式
 
@@ -44,21 +45,24 @@
 ### 2.3 前台播放器状态
 
 - Compose 只通过 `PlaybackControllerConnection` 观察和控制 Media3，不直接持有 ExoPlayer。
+- 当前歌曲展示及封面、歌词的音源信息以 Media3 当前项目携带的 `PlaybackTrack` 快照为准，由应用装配层适配给页面；浏览过滤、活动源重选或空曲库不清除现有播放控制。切换播放模式保留已有项目快照，服务重新解析后再更新。
 - 迷你播放器收纳状态属于应用会话 UI 状态：跨页面和切歌保留，应用重启后恢复展开，不写入 Room 或 DataStore。
 - Liquid Glass 弹层必须位于被采样的 Backdrop 图层之外，避免弹层递归采样自身造成 RenderThread 崩溃。
 
 ### 2.4 UI 文件职责
 
-本轮仅按职责拆文件，保留 `ui.demo` 包名与现有函数名，避免同时扩大调用点迁移范围。
+应用装配位于 `ui.app`；现有页面和视觉组件暂留 `ui.demo`，函数名与界面行为保持不变。
 
-- `AuralisDemoApp` 负责订阅 ViewModel 的曲库与播放状态，并选择加载、欢迎或产品外壳。
+- `ui.app` 中的 `AuralisDemoApp` 与 `LibraryViewModel` 负责订阅曲库、连接播放状态并选择产品入口；`DemoProductShell`、`DemoNavHost`、导航及列表状态同属应用装配层。
 - `DemoNavigationState` 封装跳转与返回，路由和参数直接从 NavController 的返回栈读取，不另存选中页面或专辑；主导航保留原有 saveState / restoreState 行为。
-- `DemoProductShell` 负责 Scaffold、Backdrop、顶栏、播放器收纳和弹层编排；当前歌曲与播放模式仍来自播放连接，收纳状态用 remember，玻璃样式沿用 rememberSaveable。
+- `DemoProductShell` 负责 Scaffold、Backdrop、顶栏、播放器收纳和弹层编排；当前歌曲与播放模式仍来自播放连接，收纳状态用 remember，玻璃风格和 Liquid Glass 模糊值通过外观 DataStore 的状态与回调传入，不在外壳中另存风格选择。
 - `DemoNavHost` 负责路由到页面的数据与回调连接，不持有播放或滚动状态；路由、缺失内容处理与页面队列构造保持原样。
 - `LibraryPageState` 在导航目的地之外集中保存资料库滚动状态及派生的顶栏标题显隐。专辑、歌曲、流派列表沿用 Compose 的 Saver；流派歌曲列表仍随 genreId 变化重置，不新增每流派独立缓存。
-- `DemoTopBar` 和 `AlbumsLayoutMenu` 负责菜单展示与局部开关；页面仅接收数据和回调，不持有播放服务。
+- `DemoTopBar` 和 `AlbumsLayoutMenu` 负责菜单展示与局部开关；打开曲库管理 Activity 的操作由外壳通过回调提供。页面不持有播放服务，也不反向依赖 `ui.app`。
+- `DependencyBoundaryTest` 检查正式代码不导入调试包、数据与播放层不导入 UI，以及页面包不导入装配层、数据库、扫描管线和播放器连接。当前仍为单 Gradle 模块，通过快速测试约束依赖方向，不引入额外框架。
 - `LibraryHomeScreen`、`AlbumsScreen`、`AlbumDetailScreen`、`TracksScreen`、`GenresScreen` 分别承载对应页面；首次使用、加载与占位页放在 `LibraryEntryScreens`。
 - `PlayerScreen` 与 `PlaybackModeSheet` 承载完整播放器和模式选择；`LibraryPresentation` 集中现有显示格式及标题可见性规则。
+- `PlayerBackground` 独立管理低分辨率封面纹理缓存、背景过渡与渲染；封面预处理由纯 Kotlin 的 `PlayerBackgroundTexture` 完成，使用 32×32 纹理、高斯模糊与色调压缩；Android 13+ 通过 `PlayerBackgroundShader` 的双三次 UV 曲面实现局部形变、控件区域压暗和去色带，旧版本使用静态柔化背景。动画只在页面 RESUMED 且播放时推进，并尊重系统关闭动画设置，不参与播放状态管理。
 - `DemoFloatingDock` 仅编排悬浮导航与播放器收纳、拖拽；`DockNavigation`、`DockMiniPlayer`、`DockPlayerArtwork` 分别负责导航、播放控制行和封面进度绘制，`DockGeometry` 保存可独立测试的几何与手势计算。
 - `GlassSurface`、`AdaptiveScreenCornerRadius` 是播放器与导航共享的视觉能力，不负责路由、播放状态或数据访问。弹层与 Backdrop 的现有图层边界保持不变。
 
@@ -91,6 +95,9 @@ Auralis 直接扫描用户授权的目录树，并读取音频文件及其元数
 - 扫描与页面组合、Activity 实例解耦，返回浏览、打开系统选择器或重建 Activity 不取消扫描；同一进程内扫描与目录增删互斥，重复扫描请求忽略。
 - 扫描不建立常驻后台服务，不保证进程退出后继续运行，也不自动恢复。已提交批次保留，用户再次打开应用后手动重新扫描；扫描完成前不发布完成状态。
 - 扫描状态与最近报告仅保存在内存；目录与曲库仍以 Room 为真源。初始化和操作失败可重试，取消系统选择器不修改目录。
+- 移除目录时，目录删除、受影响音源的访问状态与活动源重选在同一事务中更新，曲目和音源身份保留。重叠目录须经事务外的路径范围检查及 Provider 读取确认后才重绑；失去访问的源标为 UNREACHABLE，已确认 MISSING 的源保持 MISSING，无法确认祖先关系的 Provider 等待手动扫描恢复。
+
+P1 / P2 修复验证（2026-10-25）：Debug / AndroidTest 构建及 320 项 JVM 测试通过；35 项 Find X9 自动测试通过，包含播放解析并发一致性、音源归属检查、Media3 快照传输、空浏览列表下的播放控制、目录移除与回滚、重叠目录重绑，以及 Dock 回弹期间离开组件的清理。目录变更测试使用内存数据库和虚构 URI，不撤销真实曲库授权。新版已覆盖安装并启动，保留应用数据；真实曲库连续切歌、目录授权撤销／重选及非层级 Document ID Provider 的人工验收尚未完成。
 
 
 ## 4. 本地数据分层
@@ -181,7 +188,7 @@ DataStore 只保存轻量设置，例如界面偏好、播放相关选项和其�
 
 ### 9.1 封面与歌词的文件访问
 
-- `LibraryAudioSource` 保存音频源位置及文件、扫描版本；`LibraryArtworkSource` 组合音频源与内嵌封面标志，歌词读取只依赖音频源。
+- `LibraryTrack` 直接持有 `LibraryAudioSource` 与内嵌封面标志；音频源保存文件位置及文件、扫描版本，`artworkSource` 从这些字段派生，歌词读取不经过封面模型。
 - `library/saf/SafSiblingFiles` 统一同目录定位和子文档查询；封面与歌词各自负责候选优先级、内容解码及错误提示，共享层不决定产品回退规则。
 
 ## 10. 曲库持久化与对账架构（Phase 3B 规范）
@@ -198,6 +205,8 @@ Auralis 严格解耦物理连续性与逻辑呈现：
 - 浏览快照由相关表失效通知统一触发，在一次事务中读取专辑、曲目、艺术家、活动源和流派，再在事务外生成投影；不得用多个独立查询流拼接跨提交的快照。
 - 扫描发现与 TagLib 抽取完全位于数据库事务外部；数据库持久化采用分批原子事务（100~200 条批量写入），避免长锁与高频 IO 瓶颈。
 - 只有成功扫描的 scope 内部失联源才标记为 `MISSING`；根目录整体故障或单目录不可达（`DirectoryUnavailable`）时保持 `UNREACHABLE`，绝对不误删曲目。
+- 扫描收尾把缺失源对账、活动源投影和根目录完成标记放在同一事务中；任一步失败整体回滚收尾，先前已提交的观察批次仍保留。扫描中途取消不执行收尾。
+- 管理状态须在管线成功返回并刷新根目录信息后一次发布完成报告；刷新失败进入可重试失败状态，不提前显示完成。
 
 ### 10.3 抽取缓存体系（Hit / Stale / Miss）
 - 扫描器比对文件的 `(modifiedMs, sizeBytes)` 与数据库记录。
@@ -205,5 +214,34 @@ Auralis 严格解耦物理连续性与逻辑呈现：
 - **STALE / MISS**：新源或已修改文件触发 TagLib 重新抽取并更新缓存快照。
 
 ### 10.4 墓碑与恢复机制（Tombstone & Reconnect）
-- 当某个逻辑曲目的所有物理源都确认缺失时，`TrackEntity` 不物理删除，作为 Tombstone 驻留。
+- 当某个逻辑曲目的所有物理源都确认缺失时，`TrackEntity` 不物理删除，作为 Tombstone 驻留。正常浏览隐藏这些曲目，同时隐藏不再包含可见曲目的专辑和流派；仍有 AVAILABLE 或 UNREACHABLE 源的曲目不因其他源 MISSING 而隐藏。
 - 当具备相同 Strong TrackKey 的物理源重新出现时，自动重连恢复该 `TrackId`，确保播放历史与歌单引用不丢失。
+
+本轮技术债修复验证：301 项 JVM 测试、Debug 与 AndroidTest 构建通过；18 项 Find X9 内存数据库扫描／对账测试通过，包含收尾失败回滚、重试及取消后保留已提交批次。UI 包迁移后的人工交互验收仍按约定留待次日。
+
+播放背景第二版：304 项 JVM 测试及 Debug / AndroidTest 构建通过。按用户安排暂不操作手机；本轮 AGSL 运行、真实封面对比、连续切歌与功耗未验收，上一版真机测试不替代本轮结果。
+
+本轮重新验收（2026-10-25）：
+- 强制重新执行 Debug / AndroidTest 构建及 JVM 测试，构建通过，311 项 JVM 测试全部通过；APK 已覆盖安装到 Find X9，保留应用数据。
+- 21 项真机自动测试通过，覆盖播放器普通／紧凑大字布局、AGSL 背景、播放连接与模式、导航、管理页生命周期、快照一致性、根目录与扫描管线。
+- 真实曲库读取检查首次因无可播放源失败；用户重新扫描后重跑通过，抽查 12 首歌曲，封面与歌词均可读取，样本目录无外置 .lrc，外置歌词回退仍未验收。
+- 设备当前保留 66 个 MISSING 旧音源，新增 46 个可用音源且均有内嵌封面；新旧曲目 Strong Key 无重合。旧条目保留并显示占位封面符合当前缺失源保留规则。
+- ADB 点击未触发页面响应，完整应用的连续切歌、后台返回、滚动恢复与拖拽收纳仍待人工交互验收；真实封面动态过渡和功耗未完成验收，不据自动测试宣告完整真机验收通过。
+
+MISSING 浏览规则调整（2026-10-25）：
+- 用户已确认上一轮人工交互验收通过。本轮按新需求仅隐藏所有物理源均为 MISSING 的曲目；数据库记录与身份恢复机制保留，专辑和流派从剩余可见曲目生成。多源中仍有 AVAILABLE 或 UNREACHABLE 源时继续显示，其他不可用条目仍灰显。
+- Debug / AndroidTest 构建与 313 项 JVM 测试通过；Find X9 上新增的多源缺失／恢复测试、快照一致性测试和真实曲库读取测试共 3 项通过。新版已覆盖安装并启动，本轮正常浏览界面的人工验收待确认。
+
+Liquid Glass 模糊设置（2026-10-25）：
+- 顶部菜单 Slider 调整 Liquid Glass 模糊强度，范围 0–5dp、步长 0.5dp、默认 1dp；0dp 关闭模糊但保留折射。导航、迷你播放器与播放模式面板使用同一设置，磨砂玻璃参数保持不变。
+- AppearancePreferencesRepository 负责 DataStore 读写和数值规范化；应用装配层传递设置和回调，外壳只保留待持久化确认的临时预览，视觉组件不访问 DataStore。玻璃风格选择仍沿用 rememberSaveable，本轮不扩展其持久化。
+- Debug / AndroidTest 构建及 316 项 JVM 测试通过；Find X9 上菜单 Slider 数值操作、设置保存、Activity 重建恢复和磨砂切换自动检查通过。自动触摸注入拖动未触发数值变化；用户已用手指完成拖动、0.5dp 档位、实时效果及关闭重开后的保存验收，确认通过。
+
+玻璃风格持久化（2026-10-25）：
+- 玻璃风格改由外观 DataStore 保存稳定键 liquid / frosted；未保存或未知值默认 Liquid Glass。共享 GlassStyle 类型位于 ui.theme，视觉组件只接收风格数据，外壳不再维护 rememberSaveable 风格副本。
+- Debug / AndroidTest 构建与 320 项 JVM 测试通过；Find X9 菜单切换、DataStore 保存、Activity 重建恢复及 Liquid Glass 模糊值保留检查通过，测试结束恢复原设置。
+- 补充冷启动检查的构建被另一个 Gradle 进程占用配置缓存而超时，已撤下未构建的附加探针，未终止其他进程或使用缓存绕过方案；完整退出重启后的人工确认仍待完成。
+
+流光背景首轮参数调整（2026-10-25）：
+- 时间系数由 0.055 调整为 0.16，四处局部形变幅度由 0.18 / 0.15 / 0.12 / 0.16 调整为 0.23 / 0.20 / 0.16 / 0.21；整体漂移幅度及其他参数保持原值。
+- Debug 构建和 3 项背景纹理 JVM 测试通过；本轮按用户要求不安装到 Find X9，AGSL 运行、动态观感与边缘采样表现尚未真机验收。

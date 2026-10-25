@@ -92,6 +92,6 @@ class SongSearchTest {
         trackId = TrackId.random(), albumId = albumId, title = title, artists = artists,
         albumTitle = if (albumId != null) "Shared" else null, durationMs = null,
         discNumber = null, trackNumber = null, isPlayable = true,
-        unavailableReason = null, artworkSource = null,
+        unavailableReason = null, audioSource = null,
     )
 }
